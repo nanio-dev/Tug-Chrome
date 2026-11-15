@@ -80,8 +80,12 @@ function PopupInner({
   const [agentInstallOpen, setAgentInstallOpen] = useState(false);
 
   useEffect(() => {
+    if (loading) return;
+    if (settings.standaloneMode) { setAgentInstallOpen(false); return; }
+    let cancelled = false;
     void getAgentInstallState()
       .then((st) => {
+        if (cancelled) return;
         if (
           st.phase === "downloading" ||
           st.phase === "confirming_save" ||
@@ -94,7 +98,8 @@ function PopupInner({
         }
       })
       .catch(() => {});
-  }, []);
+    return () => { cancelled = true; };
+  }, [loading, settings.standaloneMode]);
   const [pendingTorrent, setPendingTorrent] = useState<{
     base64: string;
     fileName: string;
@@ -549,7 +554,7 @@ function PopupInner({
       )}
 
       <AgentInstallModal
-        open={agentInstallOpen}
+        open={agentInstallOpen && !loading && !settings.standaloneMode}
         compact
         onClose={() => setAgentInstallOpen(false)}
         onActivated={onRefreshHelper}

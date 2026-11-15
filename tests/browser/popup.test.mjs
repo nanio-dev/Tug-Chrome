@@ -33,3 +33,27 @@ it('offers retry after initial loading fails',async()=>{
  const p=await open({failOnce:true});await p.getByRole('button',{name:'重试',exact:true}).click();await p.locator('.popup-task').first().waitFor();assert.equal(await p.locator('.popup-loading').count(),0);await p.close();
  const q=await open({taskCount:1});await q.locator('.popup-task').waitFor();await q.screenshot({path:'test-results/popup/single.png'});await q.close();
 });
+it('does not restore stale Agent dialogs in browser mode or after a late install-state response',async()=>{
+ for(const initiallyStandalone of [true,false]){
+ const p=await h.context.newPage();await p.setViewportSize({width:410,height:560});
+ await p.addInitScript(({defaults,initiallyStandalone})=>{
+  const settings={...defaults,standaloneMode:initiallyStandalone,locale:'en-US'};const listeners=new Set();window.agentPopupCalls=[];
+  chrome.runtime.onMessage.addListener=fn=>listeners.add(fn);chrome.runtime.onMessage.removeListener=fn=>listeners.delete(fn);
+  window.disablePopupAgent=()=>{settings.standaloneMode=true;listeners.forEach(fn=>fn({channel:'tug-web-event',event:{type:'settings',settings:{...settings}}}));};
+  chrome.runtime.sendMessage=async m=>{window.agentPopupCalls.push(m.type);let data={};
+   if(m.type==='get_state_snapshot')data={settings:{...settings},tasks:[]};
+   else if(m.type==='get_agent_install_state')data=await new Promise(resolve=>{window.resolvePopupInstall=()=>resolve({phase:'need_pairing',bytesReceived:0,totalBytes:0,downloadId:null});});
+   else if(m.type==='ensure_native_helper')data={available:false};
+   return{ok:true,data};};
+ },{defaults,initiallyStandalone});
+ await p.goto(h.origin+'/popup.html');
+ if(!initiallyStandalone){await p.waitForFunction(()=>window.resolvePopupInstall);await p.evaluate(()=>window.disablePopupAgent());}
+ await p.getByText('Browser mode',{exact:true}).waitFor();
+ if(!initiallyStandalone){await p.evaluate(()=>window.resolvePopupInstall());await p.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));}
+ assert.equal(await p.locator('.modal-backdrop').count(),0);
+ const calls=await p.evaluate(()=>window.agentPopupCalls);
+ assert.ok(!calls.includes('install_native_agent'));
+ if(initiallyStandalone){assert.ok(!calls.includes('get_agent_install_state'));assert.ok(!calls.includes('ensure_native_helper'));}
+ await p.close();
+ }
+});
