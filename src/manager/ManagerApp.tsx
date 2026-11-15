@@ -260,10 +260,10 @@ function ManagerInner({
               {formatBytes(task.downloaded)} / {formatBytes(task.total)} ({pct.toFixed(1)}%)
             </span>
             {task.kind === "http" && (
-              <span>{task.connections} 线程</span>
+              <span>{t("task.connections", { count: task.connections })}</span>
             )}
             {task.kind === "torrent" && (
-              <span>{task.peers} 节点</span>
+              <span>{t("task.peers", { count: task.peers ?? 0 })}</span>
             )}
             {active && task.etaSecs !== null && (
               <span>ETA {formatEta(task.etaSecs)}</span>
@@ -757,15 +757,15 @@ function ManagerInner({
                   value={sort}
                   onChange={(e) => setSort(e.target.value as typeof sort)}
                 >
-                  <option value="recent">Recent</option>
-                  <option value="speed">Speed</option>
-                  <option value="name">Name</option>
+                  <option value="recent">{t("sort.recent")}</option>
+                  <option value="speed">{t("sort.speed")}</option>
+                  <option value="name">{t("sort.name")}</option>
                 </select>
               </div>
 
               {selectedIds.size > 0 && (
                 <div className="bulkbar">
-                  <span>已选 {selectedIds.size} 项</span>
+                  <span>{t("task.selected", { count: selectedIds.size })}</span>
                   <div className="spacer" />
                   <button
                     type="button"

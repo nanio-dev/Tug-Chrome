@@ -1,39 +1,9 @@
-import { createContext, useContext, useMemo, type ReactNode } from "react";
-import { zhCN, type MessageKey, type Messages } from "./zh-CN";
-import { enUS } from "./en-US";
-
-export type ResolvedLocale = "zh-CN" | "en-US";
-
-export function resolveLocale(settingLocale: string | undefined): ResolvedLocale {
-  if (settingLocale === "zh-CN" || settingLocale === "en-US") {
-    return settingLocale;
-  }
-  const navLang =
-    typeof navigator !== "undefined" ? (navigator.language || "zh-CN").toLowerCase() : "zh-cn";
-  if (navLang.startsWith("zh")) {
-    return "zh-CN";
-  }
-  return "en-US";
-}
-
-export function getDictionary(locale: ResolvedLocale): Messages {
-  return locale === "en-US" ? enUS : zhCN;
-}
-
-export function translate(
-  locale: ResolvedLocale,
-  key: MessageKey,
-  params?: Record<string, string | number>,
-): string {
-  const dict = getDictionary(locale);
-  let template = dict[key] ?? zhCN[key] ?? key;
-  if (params) {
-    for (const [k, v] of Object.entries(params)) {
-      template = template.replaceAll(`{${k}}`, String(v));
-    }
-  }
-  return template;
-}
+import { createContext, useContext, useEffect, useMemo, type ReactNode } from "react";
+import type { MessageKey } from "./zh-CN";
+import { resolveLocale, type ResolvedLocale } from "./locales";
+import { translate } from "./catalog";
+export { resolveLocale, SUPPORTED_LOCALES, type ResolvedLocale } from "./locales";
+export { getDictionary, translate } from "./catalog";
 
 interface I18nContextValue {
   locale: ResolvedLocale;
@@ -53,6 +23,7 @@ export function I18nProvider({
   children: ReactNode;
 }) {
   const locale = resolveLocale(localeSetting);
+  useEffect(() => { document.documentElement.lang = locale; }, [locale]);
   const value = useMemo<I18nContextValue>(
     () => ({
       locale,

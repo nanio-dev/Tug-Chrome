@@ -512,7 +512,10 @@ export function SettingsView({
                   >
                     <option value="system">{t("settings.language.system")}</option>
                     <option value="zh-CN">{t("settings.language.zh")}</option>
+                    <option value="zh-TW">{t("settings.language.zhTW")}</option>
                     <option value="en-US">{t("settings.language.en")}</option>
+                    <option value="ja-JP">{t("settings.language.ja")}</option>
+                    <option value="ko-KR">{t("settings.language.ko")}</option>
                   </select>
                 </div>
               </div>
@@ -528,11 +531,11 @@ export function SettingsView({
             <div className="form-card-body">
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
                 <div className="side-storage" style={{ marginTop: 0 }}>
-                  <div className="side-storage-label">VERSION</div>
+                  <div className="side-storage-label">{t("about.version")}</div>
                   <div className="side-storage-path">{info?.version ?? "1.0.0"} (MV3)</div>
                 </div>
                 <div className="side-storage" style={{ marginTop: 0 }}>
-                  <div className="side-storage-label">STORAGE ENGINE</div>
+                  <div className="side-storage-label">{t("about.storageEngine")}</div>
                   <div className="side-storage-path">{info?.storageEngine ?? "OPFS"} + IndexedDB</div>
                 </div>
               </div>

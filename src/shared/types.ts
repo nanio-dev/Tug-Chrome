@@ -1,3 +1,5 @@
+import { SUPPORTED_LOCALES, type ResolvedLocale } from "./i18n/locales";
+
 export type TaskState =
   | "queued"
   | "fetching_metadata"
@@ -88,7 +90,7 @@ export interface Settings {
   /** 主题 */
   theme: "system" | "light" | "dark";
   /** 界面语言 */
-  locale: "system" | "zh-CN" | "en-US";
+  locale: "system" | ResolvedLocale;
   /** BT: 是否启用 WebRTC (WebTorrent) P2P 节点连接 */
   btWebRtcEnabled: boolean;
   /** BT: 是否启用 HTTP/HTTPS WebSeed (BEP 19) 多连接混合加速 */
@@ -235,7 +237,7 @@ export function normalizeSettings(input: Partial<Settings>): Settings {
   if (!["system", "light", "dark"].includes(merged.theme)) {
     merged.theme = "system";
   }
-  if (!["system", "zh-CN", "en-US"].includes(merged.locale)) {
+  if (merged.locale !== "system" && !SUPPORTED_LOCALES.includes(merged.locale)) {
     merged.locale = "system";
   }
   merged.excludedDomains = Array.from(

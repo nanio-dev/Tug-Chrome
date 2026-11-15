@@ -1,4 +1,7 @@
 import { AGENT_DOWNLOAD_URL } from "../shared/agent-package";
+import { translate } from "../shared/i18n/catalog";
+import { resolveLocale } from "../shared/i18n/locales";
+import type { MessageKey } from "../shared/i18n/zh-CN";
 import {
   extractDownloadCandidate,
   guessFileNameFromUrl,
@@ -44,6 +47,10 @@ const activeExports = new Map<string, { canceled: boolean; downloadId: number | 
 let cachedSettings: Settings = { ...DEFAULT_SETTINGS };
 let settingsInitialized = false;
 let settingsInitPromise: Promise<void> | null = null;
+
+function t(key: MessageKey, params?: Record<string, string | number>): string {
+  return translate(resolveLocale(cachedSettings.locale), key, params);
+}
 
 async function loadCachedSettings(forceRefresh = false): Promise<Settings> {
   if (forceRefresh || !settingsInitialized) {
@@ -136,7 +143,7 @@ async function forwardToOffscreen<TResponse = unknown, TPayload = unknown>(
         return;
       }
       if (!resp) {
-        reject(new Error("Offscreen 引擎无响应"));
+        reject(new Error(t("error.offscreen")));
         return;
       }
       if (!resp.ok) {
@@ -265,14 +272,14 @@ async function exportBlobToDownloads(
           saveAs: false,
         });
       } else if (isUserCancel) {
-        throw new Error("已取消保存文件（点击「继续」可重新保存，无需重新下载）");
+        throw new Error(t("error.saveCancelled"));
       } else {
         throw err;
       }
     }
 
     if (typeof downloadId !== "number") {
-      throw new Error("已取消保存文件（点击「继续」可重新保存，无需重新下载）");
+      throw new Error(t("error.saveCancelled"));
     }
 
     control.downloadId = downloadId;
@@ -299,7 +306,7 @@ async function exportBlobToDownloads(
         if (settled) return;
         settled = true;
         cleanup();
-        reject(new Error("等待浏览器保存文件超时（点击「继续」可重新保存，无需重新下载）"));
+        reject(new Error(t("error.saveTimeout")));
       }, 600000);
       const onChanged = (delta: chrome.downloads.DownloadDelta) => {
         if (delta.id !== downloadId) return;
@@ -355,8 +362,8 @@ async function exportBlobToDownloads(
         item?.error || interruptedError || (wasErased || !item ? "USER_CANCELED" : "EXPORT_INCOMPLETE");
       throw new Error(
         reason === "USER_CANCELED"
-          ? "已取消保存文件（点击「继续」可重新保存，无需重新下载）"
-          : `浏览器导出文件失败 (${reason})`,
+          ? t("error.saveCancelled")
+          : t("error.exportFailed", { reason }),
       );
     }
 
@@ -561,7 +568,7 @@ function loadAgentInstallState(): Promise<void> {
     agentInstallState = saved.state;
     pendingAgentBlobUrl = typeof saved.blobUrl === "string" ? saved.blobUrl : null;
     if (["checking", "downloading", "launching", "waiting_ready"].includes(agentInstallState.phase)) {
-      setAgentInstallState({ ...agentInstallState, phase: "error", message: "安装流程被中断，请重试连接" });
+      setAgentInstallState({ ...agentInstallState, phase: "error", message: t("agentInstall.interrupted") });
     }
   })().catch(() => {});
   return installStateLoading;
@@ -592,8 +599,8 @@ async function launchDownloadedAgentById(downloadId: number): Promise<AgentInsta
       phase: "error",
       downloadId,
       message: status.updateRequired
-        ? "检测到旧版 Agent，请先退出旧进程，再运行当前构建的 agent/tug-agent.exe 后连接"
-        : "未能连接 Agent：请确认程序已运行，并允许浏览器的本地应用连接",
+        ? t("agentInstall.updateRequired")
+        : t("agentInstall.connectionFailed"),
     });
     setAgentReadyBadge(false);
   }
@@ -608,7 +615,7 @@ async function exportDownloadedAgent(): Promise<AgentInstallState> {
       bytesReceived: 0,
       totalBytes: 0,
       downloadId: null,
-      message: "缓存数据已过期，请重试",
+      message: t("agentInstall.cacheExpired"),
     });
     return agentInstallState;
   }
@@ -641,7 +648,7 @@ async function exportDownloadedAgent(): Promise<AgentInstallState> {
           setAgentInstallState({
             ...agentInstallState,
             phase: "error",
-            message: "下载记录不存在",
+            message: t("agentInstall.downloadMissing"),
           });
           return;
         }
@@ -661,8 +668,8 @@ async function exportDownloadedAgent(): Promise<AgentInstallState> {
             void chrome.notifications.create(`tug-agent-launch-${downloadId}`, {
               type: "basic",
               iconUrl: chrome.runtime.getURL("icons/icon-128.png"),
-              title: "Agent 已准备就绪",
-              message: "点击浏览器右上角 Tug Web 图标，点击「启动Agent」即可完成启用。",
+              title: t("agentInstall.notificationTitle"),
+              message: t("agentInstall.notificationBody"),
             });
           }
           return;
@@ -673,13 +680,13 @@ async function exportDownloadedAgent(): Promise<AgentInstallState> {
           setAgentInstallState({
             ...agentInstallState,
             phase: "error",
-            message: item.error || "已取消保存",
+            message: item.error || t("agentInstall.downloadCancelled"),
           });
           return;
         }
       }
       if (agentInstallState.downloadId === downloadId && agentInstallState.phase === "confirming_save") {
-        setAgentInstallState({ ...agentInstallState, phase: "error", message: "等待保存超时，请重试；已缓存安装包无需重新下载" });
+        setAgentInstallState({ ...agentInstallState, phase: "error", message: t("agentInstall.downloadTimeout") });
       }
     })();
 
@@ -834,7 +841,7 @@ async function handleBackgroundCommand(req: ExtensionRequest): Promise<unknown> 
   switch (req.type) {
     case "get_agent_credentials": {
       const status = await ensureNativeHelperRunning({ allowProtocolFallback: false });
-      if (!status.available) throw new Error("Agent 自动连接失败，下载缓存已保留，可重试保存");
+      if (!status.available) throw new Error(t("error.agentConnect"));
       return { token: await readHelperCredentials() };
     }
     case "get_native_helper_status": {
@@ -865,7 +872,7 @@ async function handleBackgroundCommand(req: ExtensionRequest): Promise<unknown> 
       if (agentInstallState.phase === "confirming_save" && agentInstallState.downloadId !== null) {
         const item = (await chrome.downloads.search({ id: agentInstallState.downloadId }))[0];
         if (item?.state === "complete") setAgentInstallState({ ...agentInstallState, phase: "need_manual_launch" });
-        else if (!item || item.state === "interrupted") setAgentInstallState({ ...agentInstallState, phase: "error", message: item?.error || "保存未完成，请重试" });
+        else if (!item || item.state === "interrupted") setAgentInstallState({ ...agentInstallState, phase: "error", message: item?.error || t("agentInstall.downloadIncomplete") });
       }
       return agentInstallState;
     }
@@ -900,7 +907,7 @@ async function handleBackgroundCommand(req: ExtensionRequest): Promise<unknown> 
       agentUninstalling = true;
       try {
         const ok = await uninstallViaHelper();
-        if (!ok) throw new Error("Agent 未确认卸载完成");
+        if (!ok) throw new Error(t("error.uninstall"));
         disconnectHelperNative();
         await setHelperCredentials(null);
         resetAgentInstallation();
@@ -962,7 +969,7 @@ async function handleBackgroundCommand(req: ExtensionRequest): Promise<unknown> 
       const { id } = req.payload as { id: number };
       const tasks = await forwardToOffscreen<TaskView[]>("list_tasks");
       const task = tasks.find((t) => t.id === id);
-      if (task && !canOpenTaskFile(task)) throw new Error("多文件种子任务请使用打开文件夹");
+      if (task && !canOpenTaskFile(task)) throw new Error(t("error.multipleFiles"));
       const browserDownloadId = task ? await findBrowserDownloadIdForTask(task) : null;
 
       if (
@@ -1240,7 +1247,7 @@ chrome.runtime.onMessage.addListener((message: unknown) => {
       chrome.notifications?.create(`tug-task-${task.id}-${task.state}`, {
         type: "basic",
         iconUrl: chrome.runtime.getURL("icons/icon-128.png"),
-        title: task.state === "completed" ? "Tug Web · 下载完成" : "Tug Web · 下载失败",
+        title: t(task.state === "completed" ? "notification.completed" : "notification.failed"),
         message: task.error ? `${task.name} (${task.error})` : task.name,
       });
     }

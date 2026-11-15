@@ -21,7 +21,7 @@ async function withBackground(mode,run){
    return {onMessage:{addListener:fn=>callbacks.push(fn)},onDisconnect:{addListener:()=>{}},disconnect:()=>globalThis.nativeCalls.disconnects++,postMessage:()=>queueMicrotask(()=>callbacks.forEach(fn=>fn(mode==='old'?{ok:true,type:'ready'}:{ok:true,protocolVersion:2,token:'ab'.repeat(32)})))};
   };
  },{mode});
- const p=await h.openPage();await rpc(p,'update_settings',{standaloneMode:false});await run({h,p,worker});
+ const p=await h.openPage();await rpc(p,'update_settings',{standaloneMode:false,locale:'en-US'});await run({h,p,worker});
  }finally{await h.close();}
 }
 it('completes fresh launch with native credentials and retains the native connection',async()=>{
@@ -35,7 +35,7 @@ it('completes fresh launch with native credentials and retains the native connec
  });
 });
 it('reports an old running Agent as incompatible, rather than timing out',async()=>{
- await withBackground('old',async({p})=>{const state=await rpc(p,'launch_downloaded_agent',{downloadId:123});assert.equal(state.phase,'error');assert.match(state.message,/旧版/);assert.doesNotMatch(state.message,/启动超时/);});
+ await withBackground('old',async({p})=>{const state=await rpc(p,'launch_downloaded_agent',{downloadId:123});assert.equal(state.phase,'error');assert.match(state.message,/Incompatible Agent/);assert.doesNotMatch(state.message,/timed out/i);});
 });
 it('returns an explicit pairing step for a running but unpaired Agent',async()=>{
  await withBackground('unpaired',async({p})=>{const state=await rpc(p,'launch_downloaded_agent',{downloadId:123});assert.equal(state.phase,'need_pairing');});

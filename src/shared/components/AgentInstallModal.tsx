@@ -153,7 +153,7 @@ export function AgentInstallModal({ open, compact = false, onClose, onActivated 
             {state.phase === "downloading" && t("agentInstall.downloading")}
             {state.phase === "confirming_save" && (
               <span style={{ color: "var(--accent)" }}>
-                {t("agentInstall.confirmingSave")}
+                {t(state.downloadId === null ? "agentInstall.confirmingSave" : "agentInstall.waitingDownload")}
               </span>
             )}
             {(state.phase === "launching" || state.phase === "waiting_ready") &&

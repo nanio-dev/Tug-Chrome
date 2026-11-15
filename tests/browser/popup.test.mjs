@@ -15,8 +15,8 @@ async function bounds(p){return p.evaluate(()=>{const rect=s=>{const r=document.
 it('keeps header and footer geometry stable while initial state and Agent check resolve',async()=>{
  const p=await open({locale:'en-US',standalone:false,delay:700});const initial=await bounds(p);await p.getByText('Checking Agent…',{exact:true}).waitFor();await p.screenshot({path:'test-results/popup/checking.png'});await p.getByText('Agent connected',{exact:true}).waitFor();const settled=await bounds(p);assert.deepEqual(settled,initial);assert.equal(await p.locator('.popup-head button').count(),1);assert.equal(await p.locator('.popup-foot').getByText('Dashboard',{exact:true}).count(),1);await p.screenshot({path:'test-results/popup/en-connected.png'});await p.close();
 });
-it('fits Chinese and English, light and dark, with all tasks reachable and footer fixed',async()=>{
- for(const locale of ['zh-CN','en-US'])for(const theme of ['light','dark']){
+it('fits all five languages, light and dark, with all tasks reachable and footer fixed',async()=>{
+ for(const locale of ['zh-CN','zh-TW','en-US','ja-JP','ko-KR'])for(const theme of ['light','dark']){
  const p=await open({locale,theme});await p.locator('.popup-task').first().waitFor();assert.equal(await p.locator('.popup-task').count(),10);assert.ok((await p.locator('.popup-task > .progress').first().boundingBox()).height>=6);
  const before=await bounds(p);await p.locator('.popup-list').evaluate(e=>e.scrollTop=e.scrollHeight);assert.deepEqual(await bounds(p),before);
  const overflow=await p.evaluate(()=>Array.from(document.querySelectorAll('.popup-head, .popup-compose, .popup-list-heading, .popup-task, .popup-foot')).filter(e=>e.scrollWidth>e.clientWidth+1).map(e=>e.className));assert.deepEqual(overflow,[]);

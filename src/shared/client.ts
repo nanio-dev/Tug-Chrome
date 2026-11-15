@@ -1,4 +1,6 @@
 import { canOpenTaskFile } from "./types";
+import { translate } from "./i18n/catalog";
+import { resolveLocale } from "./i18n/locales";
 import {
   createRequestId,
   type AgentInstallState,
@@ -36,10 +38,10 @@ export async function sendExtensionCommand<TResponse = unknown, TPayload = unkno
     | undefined;
 
   if (!response) {
-    throw new Error("未收到后台引擎响应，请重试");
+    throw new Error(translate(resolveLocale(typeof document !== "undefined" ? document.documentElement.lang : undefined), "error.noResponse"));
   }
   if (!response.ok) {
-    throw new Error(response.error?.message || "操作失败");
+    throw new Error(response.error?.message || translate(resolveLocale(typeof document !== "undefined" ? document.documentElement.lang : undefined), "error.operationFailed"));
   }
   return response.data;
 }

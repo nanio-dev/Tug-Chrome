@@ -1,0 +1,8 @@
+{
+  "extName": { "message": "Tug Web — マルチ接続・トレント・マグネットダウンローダー" },
+  "extDescription": { "message": "HTTP/HTTPSマルチ接続、ダウンロード再開、ブラウザーからの引き継ぎ、BitTorrentとマグネットリンクに対応したブラウザー用ダウンロードマネージャーです。" },
+  "ctxDownloadLink": { "message": "Tug Webでリンクをダウンロード" },
+  "ctxDownloadMedia": { "message": "Tug Webでメディアをダウンロード" },
+  "ctxDownloadSelection": { "message": "Tug Webで選択したURL／マグネットリンクをダウンロード" },
+  "ctxOpenManager": { "message": "Tug Webの管理画面を開く" }
+}

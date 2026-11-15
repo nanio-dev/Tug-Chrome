@@ -4,8 +4,9 @@ import {
   sanitizeFileName,
   shouldInterceptBrowserDownload,
 } from "../src/shared/filename.ts";
-import { enUS } from "../src/shared/i18n/en-US.ts";
 import { zhCN } from "../src/shared/i18n/zh-CN.ts";
+import { getDictionary, translate } from "../src/shared/i18n/catalog.ts";
+import { resolveLocale, SUPPORTED_LOCALES } from "../src/shared/i18n/locales.ts";
 import { DEFAULT_SETTINGS, normalizeSettings } from "../src/shared/types.ts";
 
 describe("Download Interceptor & Security / i18n Checks", () => {
@@ -76,10 +77,27 @@ describe("Download Interceptor & Security / i18n Checks", () => {
     );
   });
 
-  it("ensures zh-CN and en-US locale dictionaries have identical keys", () => {
-    const zhKeys = Object.keys(zhCN).sort();
-    const enKeys = Object.keys(enUS).sort();
-    assert.deepEqual(zhKeys, enKeys);
+  it("keeps all five dictionaries complete with matching placeholders", () => {
+    const placeholders = (value: string) => [...value.matchAll(/\{\w+\}/g)].map(m => m[0]).sort();
+    for (const locale of SUPPORTED_LOCALES) {
+      const dict = getDictionary(locale);
+      assert.deepEqual(Object.keys(dict).sort(), Object.keys(zhCN).sort(), locale);
+      for (const key of Object.keys(zhCN) as Array<keyof typeof zhCN>) {
+        assert.ok(dict[key].trim(), `${locale}: ${key}`);
+        assert.deepEqual(placeholders(dict[key]), placeholders(zhCN[key]), `${locale}: ${key}`);
+      }
+      assert.equal(normalizeSettings({ locale }).locale, locale);
+      assert.equal(resolveLocale(locale, "de-DE"), locale);
+      assert.ok(!translate(locale, "bt.selected", { selected: 1, total: 3 }).includes("{"));
+    }
+    // Substitutions must not interpret user text as another placeholder or replacement syntax.
+    assert.equal(translate("en-US", "agentInstall.error", { msg: "$& {msg}" }), "Activation failed: $& {msg}");
+  });
+
+  it("resolves browser languages and Chinese scripts without conflating simplified and traditional", () => {
+    for (const [language, expected] of Object.entries({"zh-CN":"zh-CN","zh-SG":"zh-CN","zh-Hans-TW":"zh-CN","zh-TW":"zh-TW","zh-HK":"zh-TW","zh-MO":"zh-TW","zh-Hant":"zh-TW","zh-Hant-CN":"zh-TW","ja":"ja-JP","ja-JP":"ja-JP","ko":"ko-KR","ko-KR":"ko-KR","en-GB":"en-US","de-DE":"en-US"})) {
+      assert.equal(resolveLocale("system", language), expected);
+    }
   });
 
   it("normalizes standaloneMode setting cleanly", () => {
