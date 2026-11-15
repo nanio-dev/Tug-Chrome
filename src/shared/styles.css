@@ -144,6 +144,7 @@ svg { display: block; flex: none; }
 .btn-primary { color: var(--on-accent); background: var(--accent); border-color: var(--accent); box-shadow: 0 4px 12px color-mix(in srgb, var(--accent) 22%, transparent); }
 .btn-primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
 .btn-danger { color: var(--on-red); background: var(--red); border-color: var(--red); }
+.btn-danger:hover:not(:disabled) { color: var(--on-red); background: color-mix(in srgb, var(--red) 86%, #000); border-color: color-mix(in srgb, var(--red) 86%, #000); }
 .btn-sm { height: 29px; padding: 0 10px; font-size: 11.5px; border-radius: 8px; }
 .icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; padding: 0; line-height: 1; color: var(--sub); background: var(--surface); border: 1px solid var(--line); border-radius: 8px; }
 .icon-btn svg { display: block; flex-shrink: 0; }

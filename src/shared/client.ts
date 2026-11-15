@@ -178,12 +178,30 @@ export function getAgentInstallState(): Promise<AgentInstallState> {
   return sendExtensionCommand<AgentInstallState>("get_agent_install_state");
 }
 
+export function exportDownloadedAgent(): Promise<AgentInstallState> {
+  return sendExtensionCommand<AgentInstallState>("export_downloaded_agent");
+}
+
 export function launchDownloadedAgent(downloadId: number): Promise<AgentInstallState> {
-  return sendExtensionCommand<AgentInstallState>("launch_downloaded_agent", { downloadId });
+  return sendExtensionCommand<AgentInstallState>("launch_downloaded_agent", {
+    downloadId,
+  });
+}
+
+export function resetAgentInstallState(): Promise<AgentInstallState> {
+  return sendExtensionCommand<AgentInstallState>("reset_agent_install_state");
 }
 
 export function uninstallNativeAgent(): Promise<{ uninstalled: boolean }> {
   return sendExtensionCommand<{ uninstalled: boolean }>("uninstall_native_agent");
+}
+
+export function getDiagnosticLogs(): Promise<string[]> {
+  return sendExtensionCommand<string[]>("get_diagnostic_logs");
+}
+
+export function clearDiagnosticLogs(): Promise<{ ok: boolean }> {
+  return sendExtensionCommand<{ ok: boolean }>("clear_diagnostic_logs");
 }
 
 export function subscribeTaskEvents(handler: (event: TaskEvent) => void): () => void {

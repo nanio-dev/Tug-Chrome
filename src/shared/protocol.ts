@@ -36,10 +36,14 @@ export type CommandType =
   | "activate_native_helper_protocol"
   | "install_native_agent"
   | "get_agent_install_state"
+  | "export_downloaded_agent"
   | "launch_downloaded_agent"
+  | "reset_agent_install_state"
   | "uninstall_native_agent"
   | "download_agent_binary"
-  | "report_agent_install_progress";
+  | "report_agent_install_progress"
+  | "get_diagnostic_logs"
+  | "clear_diagnostic_logs";
 
 export type AgentInstallPhase =
   | "idle"

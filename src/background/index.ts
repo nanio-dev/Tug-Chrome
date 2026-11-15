@@ -431,6 +431,7 @@ async function ensureNativeHelperRunning(options?: {
 
   const initial = await checkHelperHealth(900);
   if (initial.available) {
+    setAgentReadyBadge(false);
     void ensureExtIdRegisteredOnce();
     return { ...initial, installed: true };
   }
@@ -441,12 +442,15 @@ async function ensureNativeHelperRunning(options?: {
       const port = chrome.runtime.connectNative(NATIVE_HELPER_HOST_NAME);
       port.onDisconnect.addListener(() => {
         disconnected = true;
-        void chrome.runtime.lastError;
+        const errMsg = chrome.runtime.lastError?.message;
+        if (errMsg) {
+          logDiag("probe", `connectNative disconnected: ${errMsg}`);
+        }
       });
       try {
         port.postMessage({ action: "ping", extId: chrome.runtime.id });
-      } catch {
-        // ignore
+      } catch (err) {
+        logDiag("probe", `connectNative postMessage err: ${String(err)}`);
       }
 
       // 最多短时唤醒探测 ~4.8s；若宿主未安装/已被卸载，onDisconnect 会立即触发并提前结束
@@ -454,6 +458,8 @@ async function ensureNativeHelperRunning(options?: {
         await new Promise((r) => setTimeout(r, 300));
         const status = await checkHelperHealth(disconnected ? 250 : 600);
         if (status.available) {
+          setAgentReadyBadge(false);
+          logDiag("probe", `agent woke via connectNative (port=${status.port})`);
           void ensureExtIdRegisteredOnce();
           try {
             port.disconnect();
@@ -487,6 +493,34 @@ async function ensureNativeHelperRunning(options?: {
 
 const AGENT_DOWNLOAD_URL =
   "https://raw.githubusercontent.com/nanio-dev/Tug-Web/main/agent/tug-agent.exe";
+const DIAG_LOGS_STORAGE_KEY = "tugWebDiagLogs";
+const MAX_DIAG_LOGS = 120;
+let diagLogsCache: string[] | null = null;
+
+async function getDiagnosticLogsList(): Promise<string[]> {
+  if (diagLogsCache) return diagLogsCache;
+  try {
+    const res = await chrome.storage.local.get(DIAG_LOGS_STORAGE_KEY);
+    const arr = res[DIAG_LOGS_STORAGE_KEY];
+    diagLogsCache = Array.isArray(arr) ? arr.map(String) : [];
+  } catch {
+    diagLogsCache = [];
+  }
+  return diagLogsCache;
+}
+
+function logDiag(scope: string, message: string): void {
+  const line = `[${new Date().toISOString()}] [${scope}] ${message}`;
+  console.info(line);
+  void getDiagnosticLogsList().then((list) => {
+    list.push(line);
+    if (list.length > MAX_DIAG_LOGS) {
+      list.splice(0, list.length - MAX_DIAG_LOGS);
+    }
+    diagLogsCache = list;
+    return chrome.storage.local.set({ [DIAG_LOGS_STORAGE_KEY]: list }).catch(() => {});
+  });
+}
 
 let agentInstallState: AgentInstallState = {
   phase: "idle",
@@ -508,29 +542,138 @@ async function waitForAgentHealthAndRegister(timeoutMs: number): Promise<boolean
   return false;
 }
 
+function setAgentReadyBadge(pendingLaunch: boolean): void {
+  if (!chrome.action?.setBadgeText) return;
+  if (pendingLaunch) {
+    void chrome.action.setBadgeBackgroundColor({ color: "#D97706" }).catch(() => {});
+    void chrome.action.setBadgeText({ text: "1" }).catch(() => {});
+  } else {
+    void chrome.action.setBadgeText({ text: "" }).catch(() => {});
+  }
+}
+
+let pendingAgentBlobUrl: string | null = null;
+
 async function launchDownloadedAgentById(downloadId: number): Promise<AgentInstallState> {
+  logDiag("activate", `launching from UI gesture for downloadId=${downloadId}`);
   agentInstallState = {
     ...agentInstallState,
-    phase: "launching",
+    phase: "waiting_ready",
     downloadId,
     message: undefined,
   };
-  try {
-    await chrome.downloads.open(downloadId);
-  } catch {
-    // 某些浏览器后台调用 downloads.open 受手势限制，交由后续健康检查或前台按钮触发
-  }
-  agentInstallState = { ...agentInstallState, phase: "waiting_ready", downloadId };
-  const ok = await waitForAgentHealthAndRegister(4500);
+  const ok = await waitForAgentHealthAndRegister(12000);
   if (ok) {
+    logDiag("activate", `agent health OK and registered for downloadId=${downloadId}`);
     agentInstallState = { ...agentInstallState, phase: "ready", downloadId };
+    setAgentReadyBadge(false);
   } else {
-    agentInstallState = { ...agentInstallState, phase: "need_manual_launch", downloadId };
+    logDiag("activate", `agent health timeout (12s) for downloadId=${downloadId}`);
+    agentInstallState = {
+      ...agentInstallState,
+      phase: "error",
+      downloadId,
+      message: "启动超时，请重试",
+    };
+    setAgentReadyBadge(false);
   }
   return agentInstallState;
 }
 
+async function exportDownloadedAgent(): Promise<AgentInstallState> {
+  const blobUrl = pendingAgentBlobUrl;
+  if (!blobUrl) {
+    agentInstallState = {
+      phase: "error",
+      bytesReceived: 0,
+      totalBytes: 0,
+      downloadId: null,
+      message: "缓存数据已过期，请重试",
+    };
+    return agentInstallState;
+  }
+
+  try {
+    pendingBlobExports.set(blobUrl, "tug-agent.exe");
+    const downloadId = await chrome.downloads.download({
+      url: blobUrl,
+      filename: "tug-agent.exe",
+      conflictAction: "overwrite",
+      saveAs: false,
+    });
+    selfExportedDownloadIds.add(downloadId);
+    logDiag("activate", `chrome.downloads.download returned id=${downloadId}`);
+    agentInstallState = {
+      ...agentInstallState,
+      phase: "confirming_save",
+      downloadId,
+    };
+
+    void (async () => {
+      for (let i = 0; i < 600; i += 1) {
+        await new Promise((r) => setTimeout(r, 150));
+        const items = await chrome.downloads.search({ id: downloadId }).catch(() => []);
+        const item = items[0];
+        if (!item) {
+          logDiag("activate", `downloadId=${downloadId} search returned empty`);
+          agentInstallState = {
+            ...agentInstallState,
+            phase: "error",
+            message: "下载记录不存在",
+          };
+          return;
+        }
+        if (item.state === "in_progress") {
+          continue;
+        }
+        if (item.state === "complete") {
+          logDiag("activate", `downloadId=${downloadId} state=complete (filename=${item.filename || ""})`);
+          pendingAgentBlobUrl = null;
+          agentInstallState = {
+            ...agentInstallState,
+            phase: "need_manual_launch",
+            downloadId,
+          };
+          setAgentReadyBadge(true);
+          if (chrome.notifications?.create) {
+            void chrome.notifications.create(`tug-agent-launch-${downloadId}`, {
+              type: "basic",
+              iconUrl: chrome.runtime.getURL("icons/icon-128.png"),
+              title: "Agent 已准备就绪",
+              message: "点击浏览器右上角 Tug Web 图标，点击「启动Agent」即可完成启用。",
+            });
+          }
+          return;
+        }
+        if (item.state === "interrupted") {
+          logDiag("activate", `downloadId=${downloadId} state=interrupted (error=${item.error || ""})`);
+          pendingAgentBlobUrl = null;
+          agentInstallState = {
+            ...agentInstallState,
+            phase: "error",
+            message: item.error || "已取消保存",
+          };
+          return;
+        }
+      }
+    })();
+
+    return agentInstallState;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logDiag("activate", `exportDownloadedAgent error: ${msg}`);
+    agentInstallState = {
+      ...agentInstallState,
+      phase: "error",
+      message: msg,
+    };
+    return agentInstallState;
+  }
+}
+
 async function startInstallNativeAgent(): Promise<AgentInstallState> {
+  pendingAgentBlobUrl = null;
+  setAgentReadyBadge(false);
   agentInstallState = {
     phase: "checking",
     bytesReceived: 0,
@@ -559,71 +702,29 @@ async function startInstallNativeAgent(): Promise<AgentInstallState> {
 
   void (async () => {
     try {
-      // 由扩展内部 fetch 流式下载，避免直接触发浏览器外部 URL 下载确认框
+      logDiag("activate", `starting offscreen fetch from ${AGENT_DOWNLOAD_URL}`);
       const { blobUrl, totalBytes } = await forwardToOffscreen<
         { blobUrl: string; totalBytes: number },
         { url: string }
-      >("download_agent_binary", { url: AGENT_DOWNLOAD_URL });
+      >("download_agent_binary", { url: `${AGENT_DOWNLOAD_URL}?t=${Date.now()}` });
+      logDiag("activate", `offscreen download complete (${totalBytes} bytes), waiting for user confirm`);
 
-      // 弹出浏览器保存确认前先在弹窗内提示用户，方便用户理解并点击确认
+      pendingAgentBlobUrl = blobUrl;
       agentInstallState = {
         phase: "confirming_save",
         bytesReceived: totalBytes,
         totalBytes,
         downloadId: null,
       };
-      await new Promise((r) => setTimeout(r, 600));
-
-      pendingBlobExports.set(blobUrl, "tug-agent.exe");
-      const downloadId = await chrome.downloads.download({
-        url: blobUrl,
-        filename: "tug-agent.exe",
-        conflictAction: "overwrite",
-        saveAs: false,
-      });
-      selfExportedDownloadIds.add(downloadId);
-      agentInstallState = {
-        phase: "launching",
-        bytesReceived: totalBytes,
-        totalBytes,
-        downloadId,
-      };
-
-      for (let i = 0; i < 600; i += 1) {
-        await new Promise((r) => setTimeout(r, 150));
-        const items = await chrome.downloads.search({ id: downloadId }).catch(() => []);
-        const item = items[0];
-        if (!item) {
-          agentInstallState = {
-            ...agentInstallState,
-            phase: "error",
-            message: "下载记录不存在",
-          };
-          return;
-        }
-        if (item.state === "in_progress") {
-          continue;
-        }
-        if (item.state === "complete") {
-          await launchDownloadedAgentById(downloadId);
-          return;
-        }
-        if (item.state === "interrupted") {
-          agentInstallState = {
-            ...agentInstallState,
-            phase: "error",
-            message: item.error || "已取消保存 tug-agent.exe",
-          };
-          return;
-        }
-      }
     } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logDiag("activate", `startInstallNativeAgent error: ${msg}`);
       agentInstallState = {
         phase: "error",
         bytesReceived: 0,
         totalBytes: 0,
         downloadId: null,
-        message: err instanceof Error ? err.message : String(err),
+        message: msg,
       };
     }
   })();
@@ -728,10 +829,22 @@ async function handleBackgroundCommand(req: ExtensionRequest): Promise<unknown> 
       }
       return { ok: true };
     }
+    case "export_downloaded_agent":
+      return exportDownloadedAgent();
     case "launch_downloaded_agent": {
       const payload = req.payload as { downloadId: number };
       return launchDownloadedAgentById(payload.downloadId);
     }
+    case "reset_agent_install_state":
+      pendingAgentBlobUrl = null;
+      setAgentReadyBadge(false);
+      agentInstallState = {
+        phase: "idle",
+        bytesReceived: 0,
+        totalBytes: 0,
+        downloadId: null,
+      };
+      return agentInstallState;
     case "uninstall_native_agent": {
       let status = await checkHelperHealth(500);
       if (!status.available) {
@@ -741,10 +854,18 @@ async function handleBackgroundCommand(req: ExtensionRequest): Promise<unknown> 
         return { uninstalled: false };
       }
       const ok = await uninstallViaHelper();
+      logDiag("uninstall", `uninstallViaHelper result=${ok}`);
       extIdRegisteredInSession = false;
+      setAgentReadyBadge(false);
       await new Promise((r) => setTimeout(r, 400));
       return { uninstalled: ok };
     }
+    case "get_diagnostic_logs":
+      return getDiagnosticLogsList();
+    case "clear_diagnostic_logs":
+      diagLogsCache = [];
+      await chrome.storage.local.remove(DIAG_LOGS_STORAGE_KEY).catch(() => {});
+      return { ok: true };
     case "prepare_request_headers":
       await applySessionHeaderRules(req.payload as PrepareHeadersPayload);
       return { ok: true };

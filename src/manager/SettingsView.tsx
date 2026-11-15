@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import {
-  activateNativeHelperProtocol,
-  ensureNativeHelper,
+  clearDiagnosticLogs,
+  getDiagnosticLogs,
   getNativeHelperStatus,
   uninstallNativeAgent,
 } from "../shared/client";
@@ -9,7 +9,7 @@ import { useI18n } from "../shared/i18n";
 import type { NativeHelperStatus } from "../shared/protocol";
 import { DEFAULT_SETTINGS, type AppInfo, type Settings } from "../shared/types";
 
-export type SettingsTab = "download" | "network" | "bt" | "appearance" | "about";
+export type SettingsTab = "download" | "network" | "agent" | "bt" | "appearance" | "about";
 
 export function SettingsView({
   settings,
@@ -36,9 +36,10 @@ export function SettingsView({
   const [helperStatus, setHelperStatus] = useState<NativeHelperStatus>({
     available: false,
   });
-  const [wakingHelper, setWakingHelper] = useState(false);
   const [uninstallingHelper, setUninstallingHelper] = useState(false);
   const [uninstallToast, setUninstallToast] = useState(false);
+  const [diagLogs, setDiagLogs] = useState<string[]>([]);
+  const [copiedLogs, setCopiedLogs] = useState(false);
 
   useEffect(() => {
     setDraft(structuredClone(settings));
@@ -57,19 +58,12 @@ export function SettingsView({
       .catch(() => {});
   }, [tab, settings.standaloneMode, draft.standaloneMode]);
 
-  const handleWakeHelper = async () => {
-    if (draft.standaloneMode) return;
-    setWakingHelper(true);
-    try {
-      let st = await ensureNativeHelper(false);
-      if (!st.available) {
-        st = await activateNativeHelperProtocol();
-      }
-      setHelperStatus(st);
-    } finally {
-      setWakingHelper(false);
-    }
-  };
+  useEffect(() => {
+    if (tab !== "about") return;
+    void getDiagnosticLogs()
+      .then((logs) => setDiagLogs(logs))
+      .catch(() => {});
+  }, [tab]);
 
   const handleUninstallHelper = async () => {
     if (!window.confirm(t("settings.btHelperUninstallConfirm"))) return;
@@ -145,6 +139,7 @@ export function SettingsView({
           [
             ["download", t("settings.tab.download")],
             ["network", t("settings.tab.network")],
+            ["agent", t("settings.tab.agent")],
             ["bt", t("settings.tab.bt")],
             ["appearance", t("settings.tab.appearance")],
             ["about", t("settings.tab.about")],
@@ -284,8 +279,6 @@ export function SettingsView({
                 </span>
               </label>
 
-              {renderStandaloneModeToggle()}
-
               <div className="field">
                 <label>{t("settings.excludedDomains")}</label>
                 <input
@@ -376,10 +369,10 @@ export function SettingsView({
           </div>
         )}
 
-        {tab === "bt" && (
+        {tab === "agent" && (
           <div className="form-card">
             <div className="form-card-head">
-              <h3>{t("settings.tab.bt")}</h3>
+              <h3>{t("settings.tab.agent")}</h3>
             </div>
             <div className="form-card-body">
               {renderStandaloneModeToggle()}
@@ -412,37 +405,32 @@ export function SettingsView({
                     {t("settings.btHelperDesc")}
                   </div>
                 </div>
-                <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                {helperStatus.available && !draft.standaloneMode && (
                   <button
                     type="button"
-                    className="btn"
-                    disabled={wakingHelper || uninstallingHelper || draft.standaloneMode}
-                    onClick={() => void handleWakeHelper()}
+                    className="btn btn-danger"
+                    disabled={uninstallingHelper}
+                    onClick={() => void handleUninstallHelper()}
                   >
-                    {draft.standaloneMode
-                      ? t("sidebar.helperDisabled")
-                      : wakingHelper
-                        ? t("settings.btHelperWaking")
-                        : t("settings.btHelperWakeBtn")}
+                    {uninstallingHelper
+                      ? t("settings.btHelperUninstalling")
+                      : t("settings.btHelperUninstallBtn")}
                   </button>
-                  {helperStatus.available && !draft.standaloneMode && (
-                    <button
-                      type="button"
-                      className="btn btn-danger"
-                      disabled={uninstallingHelper}
-                      onClick={() => void handleUninstallHelper()}
-                    >
-                      {uninstallingHelper
-                        ? t("settings.btHelperUninstalling")
-                        : t("settings.btHelperUninstallBtn")}
-                    </button>
-                  )}
-                </div>
+                )}
               </div>
               {uninstallToast && (
                 <div className="hint ok">{t("settings.btHelperUninstalled")}</div>
               )}
+            </div>
+          </div>
+        )}
 
+        {tab === "bt" && (
+          <div className="form-card">
+            <div className="form-card-head">
+              <h3>{t("settings.tab.bt")}</h3>
+            </div>
+            <div className="form-card-body">
               <label className="check-row">
                 <input
                   type="checkbox"
@@ -545,6 +533,51 @@ export function SettingsView({
               </div>
               <div className="hint">
                 Apache License 2.0 · Tug Family (Tug Desktop · Tug Android · Tug Web)
+              </div>
+
+              <div className="field" style={{ marginTop: "6px" }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px" }}>
+                  <label style={{ margin: 0 }}>{t("about.diagLogsTitle")}</label>
+                  <div style={{ display: "flex", gap: "6px" }}>
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      onClick={() =>
+                        void getDiagnosticLogs().then((logs) => setDiagLogs(logs)).catch(() => {})
+                      }
+                    >
+                      {t("about.diagLogsRefresh")}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      onClick={() =>
+                        void clearDiagnosticLogs().then(() => setDiagLogs([])).catch(() => {})
+                      }
+                    >
+                      {t("about.diagLogsClear")}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-primary"
+                      onClick={async () => {
+                        const text = diagLogs.join("\n") || t("about.diagLogsEmpty");
+                        await navigator.clipboard.writeText(text).catch(() => {});
+                        setCopiedLogs(true);
+                        setTimeout(() => setCopiedLogs(false), 2000);
+                      }}
+                    >
+                      {copiedLogs ? t("about.diagLogsCopied") : t("about.diagLogsCopy")}
+                    </button>
+                  </div>
+                </div>
+                <textarea
+                  readOnly
+                  rows={10}
+                  className="mono"
+                  style={{ fontSize: "11px", lineHeight: 1.45 }}
+                  value={diagLogs.length > 0 ? diagLogs.join("\n") : t("about.diagLogsEmpty")}
+                />
               </div>
             </div>
           </div>

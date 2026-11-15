@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
 import {
+  exportDownloadedAgent,
   getAgentInstallState,
   installNativeAgent,
   launchDownloadedAgent,
+  resetAgentInstallState,
 } from "../client";
 import { formatBytes } from "../format";
 import { useI18n } from "../i18n";
@@ -41,7 +43,11 @@ export function AgentInstallModal({
           void onActivated();
           return;
         }
-        if (next.phase === "error" || next.phase === "need_manual_launch") {
+        if (
+          next.phase === "error" ||
+          next.phase === "need_manual_launch" ||
+          (next.phase === "confirming_save" && next.downloadId === null)
+        ) {
           return;
         }
       } catch {
@@ -54,14 +60,29 @@ export function AgentInstallModal({
 
     void (async () => {
       try {
-        const initial = await installNativeAgent();
+        const existing = await getAgentInstallState();
+        if (cancelled) return;
+        const activePhases = new Set([
+          "downloading",
+          "confirming_save",
+          "launching",
+          "waiting_ready",
+          "need_manual_launch",
+        ]);
+        const initial = activePhases.has(existing.phase)
+          ? existing
+          : await installNativeAgent();
         if (cancelled) return;
         setState(initial);
         if (initial.phase === "ready") {
           void onActivated();
           return;
         }
-        if (initial.phase !== "error") {
+        if (
+          initial.phase !== "error" &&
+          initial.phase !== "need_manual_launch" &&
+          !(initial.phase === "confirming_save" && initial.downloadId === null)
+        ) {
           timer = window.setTimeout(() => void poll(), 200);
         }
       } catch (err) {
@@ -96,14 +117,66 @@ export function AgentInstallModal({
         ? 100
         : 0;
 
+  const handleConfirmSave = async () => {
+    const next = await exportDownloadedAgent();
+    setState(next);
+    if (next.phase !== "error") {
+      // 开始轮询直到浏览器保存完成进入 need_manual_launch
+      const pollAfterSave = async () => {
+        const cur = await getAgentInstallState().catch(() => null);
+        if (!cur) return;
+        setState(cur);
+        if (cur.phase === "need_manual_launch" || cur.phase === "error" || cur.phase === "ready") {
+          return;
+        }
+        window.setTimeout(() => void pollAfterSave(), 200);
+      };
+      window.setTimeout(() => void pollAfterSave(), 200);
+    }
+  };
+
   const handleManualLaunch = async () => {
     const id = state.downloadId;
-    if (id === null) return;
+    if (id === null) {
+      await resetAgentInstallState().catch(() => {});
+      setState({
+        phase: "error",
+        bytesReceived: 0,
+        totalBytes: 0,
+        downloadId: null,
+        message: t("agentInstall.fileMissing"),
+      });
+      return;
+    }
+
+    // 校验文件是否仍然存在于磁盘，防止下载后被删除导致点击死循环
     try {
+      const items = await chrome.downloads.search({ id });
+      const item = items[0];
+      if (!item || item.exists === false || item.state !== "complete") {
+        await resetAgentInstallState().catch(() => {});
+        setState({
+          phase: "error",
+          bytesReceived: 0,
+          totalBytes: 0,
+          downloadId: null,
+          message: t("agentInstall.fileMissing"),
+        });
+        return;
+      }
       await chrome.downloads.open(id);
     } catch {
-      // fallback to background check
+      await resetAgentInstallState().catch(() => {});
+      setState({
+        phase: "error",
+        bytesReceived: 0,
+        totalBytes: 0,
+        downloadId: null,
+        message: t("agentInstall.launchFailed"),
+      });
+      return;
     }
+
     setState((prev) => ({ ...prev, phase: "launching" }));
     const next = await launchDownloadedAgent(id);
     setState(next);
@@ -123,14 +196,38 @@ export function AgentInstallModal({
     setState(next);
     if (next.phase === "ready") {
       await onActivated();
+    } else if (next.phase !== "error") {
+      const pollRetry = async () => {
+        const cur = await getAgentInstallState().catch(() => null);
+        if (!cur) return;
+        setState(cur);
+        if (
+          cur.phase === "ready" ||
+          cur.phase === "error" ||
+          cur.phase === "need_manual_launch" ||
+          (cur.phase === "confirming_save" && cur.downloadId === null)
+        ) {
+          if (cur.phase === "ready") void onActivated();
+          return;
+        }
+        window.setTimeout(() => void pollRetry(), 200);
+      };
+      window.setTimeout(() => void pollRetry(), 200);
     }
+  };
+
+  const handleClose = () => {
+    if (state.phase === "error" || state.phase === "ready") {
+      void resetAgentInstallState().catch(() => {});
+    }
+    onClose();
   };
 
   return (
     <div
       className="modal-backdrop"
       style={compact ? { padding: "12px" } : undefined}
-      onClick={onClose}
+      onClick={handleClose}
     >
       <div
         className="modal"
@@ -152,7 +249,7 @@ export function AgentInstallModal({
             type="button"
             className="icon-btn"
             style={compact ? { width: "24px", height: "24px" } : undefined}
-            onClick={onClose}
+            onClick={handleClose}
           >
             ×
           </button>
@@ -162,7 +259,7 @@ export function AgentInstallModal({
           className="modal-body"
           style={compact ? { padding: "14px", gap: "10px" } : undefined}
         >
-          <div style={{ fontSize: "12.5px", fontWeight: 600 }}>
+          <div style={{ fontSize: "12.5px", fontWeight: 600, lineHeight: 1.5 }}>
             {state.phase === "checking" && t("agentInstall.checking")}
             {state.phase === "downloading" && t("agentInstall.downloading")}
             {state.phase === "confirming_save" && (
@@ -220,7 +317,7 @@ export function AgentInstallModal({
                 ? `${formatBytes(state.bytesReceived)} / ${formatBytes(state.totalBytes)}`
                 : state.bytesReceived > 0
                   ? formatBytes(state.bytesReceived)
-                  : "tug-agent.exe"}
+                  : "Tug Agent"}
             </span>
             <span>{pct}%</span>
           </div>
@@ -230,23 +327,23 @@ export function AgentInstallModal({
           className="modal-foot"
           style={compact ? { padding: "9px 14px" } : undefined}
         >
+          {state.phase === "confirming_save" && state.downloadId === null && (
+            <button
+              type="button"
+              className="btn btn-sm btn-primary"
+              onClick={() => void handleConfirmSave()}
+            >
+              {t("agentInstall.confirmSaveBtn")}
+            </button>
+          )}
           {state.phase === "need_manual_launch" && state.downloadId !== null && (
-            <>
-              <button
-                type="button"
-                className="btn btn-sm"
-                onClick={() => chrome.downloads.show(state.downloadId!)}
-              >
-                {t("agentInstall.showFolderBtn")}
-              </button>
-              <button
-                type="button"
-                className="btn btn-sm btn-primary"
-                onClick={() => void handleManualLaunch()}
-              >
-                {t("agentInstall.manualBtn")}
-              </button>
-            </>
+            <button
+              type="button"
+              className="btn btn-sm btn-primary"
+              onClick={() => void handleManualLaunch()}
+            >
+              {t("agentInstall.manualBtn")}
+            </button>
           )}
           {state.phase === "error" && (
             <button
@@ -260,7 +357,7 @@ export function AgentInstallModal({
           <button
             type="button"
             className={`btn btn-sm ${state.phase === "ready" ? "btn-primary" : ""}`}
-            onClick={onClose}
+            onClick={handleClose}
           >
             {state.phase === "ready" ? t("agentInstall.done") : t("add.cancel")}
           </button>

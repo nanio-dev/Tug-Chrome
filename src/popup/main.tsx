@@ -8,6 +8,7 @@ import {
 import {
   addTask,
   ensureNativeHelper,
+  getAgentInstallState,
   getNativeHelperStatus,
   getStateSnapshot,
   openDownloadsFolder,
@@ -69,6 +70,22 @@ function PopupInner({
   const [urlInput, setUrlInput] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [agentInstallOpen, setAgentInstallOpen] = useState(false);
+
+  useEffect(() => {
+    void getAgentInstallState()
+      .then((st) => {
+        if (
+          st.phase === "downloading" ||
+          st.phase === "confirming_save" ||
+          st.phase === "launching" ||
+          st.phase === "waiting_ready" ||
+          st.phase === "need_manual_launch"
+        ) {
+          setAgentInstallOpen(true);
+        }
+      })
+      .catch(() => {});
+  }, []);
   const [pendingTorrent, setPendingTorrent] = useState<{
     base64: string;
     fileName: string;
@@ -202,7 +219,7 @@ function PopupInner({
             title={t("sidebar.enableAgentHint")}
             onClick={() => void onEnableAgent()}
           >
-            ○ Agent {t("sidebar.helperDisabled")}
+            ○ Agent:{t("sidebar.helperDisabled")}
           </span>
         ) : (
           <span
@@ -220,7 +237,7 @@ function PopupInner({
             }}
           >
             {helperStatus?.available
-              ? `● Agent :${helperStatus.port}`
+              ? `● Agent:${t("popup.agentEnabled")}`
               : checkingHelper
                 ? `○ ${t("sidebar.helperConnecting")}`
                 : `○ ${t("sidebar.helperStandby")}`}

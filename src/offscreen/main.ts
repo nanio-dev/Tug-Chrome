@@ -181,7 +181,7 @@ async function handleOffscreenCommand(
       return manager.updateSettings(req.payload as Partial<Settings>);
     case "download_agent_binary": {
       const { url } = req.payload as { url: string };
-      const res = await fetch(url);
+      const res = await fetch(url, { cache: "no-store" });
       if (!res.ok) {
         throw new Error(`HTTP ${res.status} ${res.statusText}`);
       }
