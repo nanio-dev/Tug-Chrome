@@ -39,16 +39,19 @@ use crate::config::CREATE_NO_WINDOW;
 use crate::config::{DEFAULT_PORT, IDLE_TIMEOUT_SECS};
 use crate::file_ops::{handle_fs_delete, handle_fs_export, handle_fs_open};
 use crate::native_messaging::{spawn_native_messaging_stdio_loop, write_native_messaging_frame};
-use crate::registry::parse_cli_and_register;
+use crate::registry::{maybe_migrate_to_app_dir, parse_cli_and_register};
 use crate::routes::{
     handle_health, handle_options, handle_register, handle_session_peers, handle_start_session,
-    handle_stop_session, json_error, with_cors,
+    handle_stop_session, handle_uninstall, json_error, with_cors,
 };
 use crate::state::{AppState, init_bt_session, now_secs};
 use crate::streamer::handle_webseed_stream;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    if maybe_migrate_to_app_dir() {
+        return Ok(());
+    }
     let (is_native_messaging, install_only) = parse_cli_and_register();
     if install_only {
         if let Ok(exe_path) = std::env::current_exe() {
@@ -148,6 +151,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/fs/delete",
             post(handle_fs_delete).options(handle_options),
+        )
+        .route(
+            "/uninstall",
+            post(handle_uninstall).options(handle_options),
         )
         .fallback(|method: Method| async move {
             if method == Method::OPTIONS {

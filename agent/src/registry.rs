@@ -309,6 +309,7 @@ pub fn parse_cli_and_register() -> (bool, bool) {
     let mut is_native_messaging = false;
     let mut install_only = false;
     let mut ext_id: Option<String> = None;
+    let mut migrated_from: Option<PathBuf> = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -317,6 +318,9 @@ pub fn parse_cli_and_register() -> (bool, bool) {
             install_only = true;
         } else if arg == "--ext-id" && i + 1 < args.len() {
             ext_id = Some(args[i + 1].clone());
+            i += 1;
+        } else if arg == "--migrated-from" && i + 1 < args.len() {
+            migrated_from = Some(PathBuf::from(&args[i + 1]));
             i += 1;
         } else if arg.starts_with("chrome-extension://") {
             is_native_messaging = true;
@@ -333,6 +337,128 @@ pub fn parse_cli_and_register() -> (bool, bool) {
         i += 1;
     }
 
+    if let Some(old_path) = migrated_from {
+        std::thread::spawn(move || {
+            for _ in 0..8 {
+                std::thread::sleep(std::time::Duration::from_millis(350));
+                if !old_path.exists() || std::fs::remove_file(&old_path).is_ok() {
+                    break;
+                }
+            }
+        });
+    }
+
     let _ = install_and_register(ext_id.as_deref(), install_only);
     (is_native_messaging, install_only)
+}
+
+#[cfg(target_os = "windows")]
+fn resolve_persistent_agent_dir() -> Option<PathBuf> {
+    std::env::var_os("LOCALAPPDATA").map(|local| PathBuf::from(local).join("TugAgent"))
+}
+
+/// 若当前是从下载目录等临时位置初次运行，则将自身复制到 `%LOCALAPPDATA%\TugAgent\tug-agent.exe`
+/// 并拉起新实例（无脚本、无 taskkill），随后当前进程正常退出。返回 `true` 表示已触发迁移。
+pub fn maybe_migrate_to_app_dir() -> bool {
+    #[cfg(not(target_os = "windows"))]
+    {
+        return false;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        if args.iter().any(|a| a.starts_with("chrome-extension://") || a == "--migrated-from" || a == "--no-migrate") {
+            return false;
+        }
+
+        let Ok(current_exe) = std::env::current_exe() else {
+            return false;
+        };
+        let Some(current_dir) = current_exe.parent() else {
+            return false;
+        };
+
+        // 开发目录（旁边有 Cargo.toml 或位于 target\debug / target\release）不迁移
+        let current_lower = current_exe.to_string_lossy().to_ascii_lowercase();
+        if current_dir.join("Cargo.toml").exists()
+            || current_lower.contains(r"\target\debug\")
+            || current_lower.contains(r"\target\release\")
+        {
+            return false;
+        }
+
+        let Some(target_dir) = resolve_persistent_agent_dir() else {
+            return false;
+        };
+        let target_exe = target_dir.join("tug-agent.exe");
+        if current_lower == target_exe.to_string_lossy().to_ascii_lowercase() {
+            return false;
+        }
+
+        if std::fs::create_dir_all(&target_dir).is_err() {
+            return false;
+        }
+        if std::fs::copy(&current_exe, &target_exe).is_err() {
+            return false;
+        }
+
+        let mut cmd = Command::new(&target_exe);
+        for arg in args {
+            cmd.arg(arg);
+        }
+        cmd.arg("--migrated-from").arg(&current_exe);
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        if cmd.spawn().is_ok() {
+            return true;
+        }
+        false
+    }
+}
+
+/// 彻底卸载 Tug Agent：清理注册表、清单文件、临时目录，并在退出后删除常驻目录中的自身文件。
+pub fn uninstall_self() {
+    #[cfg(target_os = "windows")]
+    {
+        for proto in [PROTOCOL_SCHEME, "tug-web"] {
+            let key = format!(r"HKCU\Software\Classes\{proto}");
+            let _ = run_reg_silent(&["delete", &key, "/f"]);
+        }
+
+        for target in BROWSER_TARGETS {
+            for host in [HOST_NAME, LEGACY_HOST_NAME] {
+                let key = format!(r"{}\{host}", target.nm_subkey);
+                let _ = run_reg_silent(&["delete", &key, "/f"]);
+            }
+        }
+
+        if let Ok(exe_path) = std::env::current_exe() {
+            if let Some(dir) = exe_path.parent() {
+                let _ = std::fs::remove_file(dir.join(format!("{HOST_NAME}.json")));
+                let _ = std::fs::remove_file(dir.join(format!("{LEGACY_HOST_NAME}.json")));
+            }
+        }
+
+        if let Some(app_dir) = resolve_persistent_agent_dir() {
+            let _ = std::fs::remove_file(app_dir.join(format!("{HOST_NAME}.json")));
+        }
+
+        let _ = std::fs::remove_dir_all(std::env::temp_dir().join("tug-agent-stage"));
+
+        if let (Ok(exe_path), Some(app_dir)) = (std::env::current_exe(), resolve_persistent_agent_dir()) {
+            let exe_lower = exe_path.to_string_lossy().to_ascii_lowercase();
+            let dir_lower = app_dir.to_string_lossy().to_ascii_lowercase();
+            if exe_lower.starts_with(&dir_lower) {
+                let cmd_line = format!(
+                    "ping -n 3 127.0.0.1 >nul & del /f /q \"{}\" & rmdir /s /q \"{}\"",
+                    exe_path.to_string_lossy(),
+                    app_dir.to_string_lossy()
+                );
+                let mut cmd = Command::new("cmd");
+                cmd.args(["/c", &cmd_line]);
+                cmd.creation_flags(CREATE_NO_WINDOW);
+                let _ = cmd.spawn();
+            }
+        }
+    }
 }

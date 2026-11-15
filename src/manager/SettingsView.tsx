@@ -3,6 +3,7 @@ import {
   activateNativeHelperProtocol,
   ensureNativeHelper,
   getNativeHelperStatus,
+  uninstallNativeAgent,
 } from "../shared/client";
 import { useI18n } from "../shared/i18n";
 import type { NativeHelperStatus } from "../shared/protocol";
@@ -36,6 +37,8 @@ export function SettingsView({
     available: false,
   });
   const [wakingHelper, setWakingHelper] = useState(false);
+  const [uninstallingHelper, setUninstallingHelper] = useState(false);
+  const [uninstallToast, setUninstallToast] = useState(false);
 
   useEffect(() => {
     setDraft(structuredClone(settings));
@@ -65,6 +68,22 @@ export function SettingsView({
       setHelperStatus(st);
     } finally {
       setWakingHelper(false);
+    }
+  };
+
+  const handleUninstallHelper = async () => {
+    if (!window.confirm(t("settings.btHelperUninstallConfirm"))) return;
+    setUninstallingHelper(true);
+    setUninstallToast(false);
+    try {
+      const res = await uninstallNativeAgent();
+      if (res.uninstalled) {
+        setHelperStatus({ available: false, installed: false });
+        setUninstallToast(true);
+        setTimeout(() => setUninstallToast(false), 3000);
+      }
+    } finally {
+      setUninstallingHelper(false);
     }
   };
 
@@ -393,19 +412,36 @@ export function SettingsView({
                     {t("settings.btHelperDesc")}
                   </div>
                 </div>
-                <button
-                  type="button"
-                  className="btn"
-                  disabled={wakingHelper || draft.standaloneMode}
-                  onClick={() => void handleWakeHelper()}
-                >
-                  {draft.standaloneMode
-                    ? t("sidebar.helperDisabled")
-                    : wakingHelper
-                      ? t("settings.btHelperWaking")
-                      : t("settings.btHelperWakeBtn")}
-                </button>
+                <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={wakingHelper || uninstallingHelper || draft.standaloneMode}
+                    onClick={() => void handleWakeHelper()}
+                  >
+                    {draft.standaloneMode
+                      ? t("sidebar.helperDisabled")
+                      : wakingHelper
+                        ? t("settings.btHelperWaking")
+                        : t("settings.btHelperWakeBtn")}
+                  </button>
+                  {helperStatus.available && !draft.standaloneMode && (
+                    <button
+                      type="button"
+                      className="btn btn-danger"
+                      disabled={uninstallingHelper}
+                      onClick={() => void handleUninstallHelper()}
+                    >
+                      {uninstallingHelper
+                        ? t("settings.btHelperUninstalling")
+                        : t("settings.btHelperUninstallBtn")}
+                    </button>
+                  )}
+                </div>
               </div>
+              {uninstallToast && (
+                <div className="hint ok">{t("settings.btHelperUninstalled")}</div>
+              )}
 
               <label className="check-row">
                 <input

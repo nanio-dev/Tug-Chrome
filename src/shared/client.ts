@@ -182,6 +182,10 @@ export function launchDownloadedAgent(downloadId: number): Promise<AgentInstallS
   return sendExtensionCommand<AgentInstallState>("launch_downloaded_agent", { downloadId });
 }
 
+export function uninstallNativeAgent(): Promise<{ uninstalled: boolean }> {
+  return sendExtensionCommand<{ uninstalled: boolean }>("uninstall_native_agent");
+}
+
 export function subscribeTaskEvents(handler: (event: TaskEvent) => void): () => void {
   const listener = (message: unknown) => {
     if (

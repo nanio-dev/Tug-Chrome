@@ -240,3 +240,21 @@ export async function deleteFileViaHelper(path: string): Promise<boolean> {
     clearTimeout(timer);
   }
 }
+
+export async function uninstallViaHelper(): Promise<boolean> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 3500);
+  try {
+    const resp = await fetch(`${NATIVE_HELPER_BASE_URL}/uninstall`, {
+      method: "POST",
+      signal: controller.signal,
+    });
+    if (!resp.ok) return false;
+    const data = (await resp.json()) as { ok?: boolean };
+    return Boolean(data?.ok);
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}

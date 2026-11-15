@@ -20,6 +20,7 @@ import {
   NATIVE_HELPER_HOST_NAME,
   openFileViaHelper,
   registerExtIdWithHelper,
+  uninstallViaHelper,
 } from "../engine/torrent/native-helper";
 import { parseTorrentBuffer, uint8ArrayToBase64 } from "../engine/torrent/parser";
 import {
@@ -549,22 +550,45 @@ async function startInstallNativeAgent(): Promise<AgentInstallState> {
     return agentInstallState;
   }
 
-  try {
-    const downloadId = await chrome.downloads.download({
-      url: AGENT_DOWNLOAD_URL,
-      filename: "tug-agent.exe",
-      conflictAction: "overwrite",
-      saveAs: false,
-    });
-    selfExportedDownloadIds.add(downloadId);
-    agentInstallState = {
-      phase: "downloading",
-      bytesReceived: 0,
-      totalBytes: 0,
-      downloadId,
-    };
+  agentInstallState = {
+    phase: "downloading",
+    bytesReceived: 0,
+    totalBytes: 0,
+    downloadId: null,
+  };
 
-    void (async () => {
+  void (async () => {
+    try {
+      // 由扩展内部 fetch 流式下载，避免直接触发浏览器外部 URL 下载确认框
+      const { blobUrl, totalBytes } = await forwardToOffscreen<
+        { blobUrl: string; totalBytes: number },
+        { url: string }
+      >("download_agent_binary", { url: AGENT_DOWNLOAD_URL });
+
+      // 弹出浏览器保存确认前先在弹窗内提示用户，方便用户理解并点击确认
+      agentInstallState = {
+        phase: "confirming_save",
+        bytesReceived: totalBytes,
+        totalBytes,
+        downloadId: null,
+      };
+      await new Promise((r) => setTimeout(r, 600));
+
+      pendingBlobExports.set(blobUrl, "tug-agent.exe");
+      const downloadId = await chrome.downloads.download({
+        url: blobUrl,
+        filename: "tug-agent.exe",
+        conflictAction: "overwrite",
+        saveAs: false,
+      });
+      selfExportedDownloadIds.add(downloadId);
+      agentInstallState = {
+        phase: "launching",
+        bytesReceived: totalBytes,
+        totalBytes,
+        downloadId,
+      };
+
       for (let i = 0; i < 600; i += 1) {
         await new Promise((r) => setTimeout(r, 150));
         const items = await chrome.downloads.search({ id: downloadId }).catch(() => []);
@@ -578,21 +602,9 @@ async function startInstallNativeAgent(): Promise<AgentInstallState> {
           return;
         }
         if (item.state === "in_progress") {
-          agentInstallState = {
-            phase: "downloading",
-            bytesReceived: item.bytesReceived ?? 0,
-            totalBytes: item.totalBytes ?? 0,
-            downloadId,
-          };
           continue;
         }
         if (item.state === "complete") {
-          agentInstallState = {
-            phase: "launching",
-            bytesReceived: item.totalBytes || item.bytesReceived || 0,
-            totalBytes: item.totalBytes || item.bytesReceived || 0,
-            downloadId,
-          };
           await launchDownloadedAgentById(downloadId);
           return;
         }
@@ -600,24 +612,23 @@ async function startInstallNativeAgent(): Promise<AgentInstallState> {
           agentInstallState = {
             ...agentInstallState,
             phase: "error",
-            message: item.error || "下载被中断",
+            message: item.error || "已取消保存 tug-agent.exe",
           };
           return;
         }
       }
-    })();
+    } catch (err) {
+      agentInstallState = {
+        phase: "error",
+        bytesReceived: 0,
+        totalBytes: 0,
+        downloadId: null,
+        message: err instanceof Error ? err.message : String(err),
+      };
+    }
+  })();
 
-    return agentInstallState;
-  } catch (err) {
-    agentInstallState = {
-      phase: "error",
-      bytesReceived: 0,
-      totalBytes: 0,
-      downloadId: null,
-      message: err instanceof Error ? err.message : String(err),
-    };
-    return agentInstallState;
-  }
+  return agentInstallState;
 }
 
 async function findBrowserDownloadIdForTask(task: TaskView): Promise<number | null> {
@@ -706,9 +717,33 @@ async function handleBackgroundCommand(req: ExtensionRequest): Promise<unknown> 
       return startInstallNativeAgent();
     case "get_agent_install_state":
       return agentInstallState;
+    case "report_agent_install_progress": {
+      const p = req.payload as { bytesReceived: number; totalBytes: number };
+      if (agentInstallState.phase === "downloading") {
+        agentInstallState = {
+          ...agentInstallState,
+          bytesReceived: p.bytesReceived,
+          totalBytes: p.totalBytes,
+        };
+      }
+      return { ok: true };
+    }
     case "launch_downloaded_agent": {
       const payload = req.payload as { downloadId: number };
       return launchDownloadedAgentById(payload.downloadId);
+    }
+    case "uninstall_native_agent": {
+      let status = await checkHelperHealth(500);
+      if (!status.available) {
+        status = await ensureNativeHelperRunning({ allowProtocolFallback: false });
+      }
+      if (!status.available) {
+        return { uninstalled: false };
+      }
+      const ok = await uninstallViaHelper();
+      extIdRegisteredInSession = false;
+      await new Promise((r) => setTimeout(r, 400));
+      return { uninstalled: ok };
     }
     case "prepare_request_headers":
       await applySessionHeaderRules(req.payload as PrepareHeadersPayload);

@@ -88,7 +88,8 @@ export function AgentInstallModal({
   const pct =
     state.totalBytes > 0
       ? Math.min(100, Math.round((state.bytesReceived / state.totalBytes) * 100))
-      : state.phase === "launching" ||
+      : state.phase === "confirming_save" ||
+          state.phase === "launching" ||
           state.phase === "waiting_ready" ||
           state.phase === "need_manual_launch" ||
           state.phase === "ready"
@@ -164,6 +165,11 @@ export function AgentInstallModal({
           <div style={{ fontSize: "12.5px", fontWeight: 600 }}>
             {state.phase === "checking" && t("agentInstall.checking")}
             {state.phase === "downloading" && t("agentInstall.downloading")}
+            {state.phase === "confirming_save" && (
+              <span style={{ color: "var(--accent)" }}>
+                {t("agentInstall.confirmingSave")}
+              </span>
+            )}
             {(state.phase === "launching" || state.phase === "waiting_ready") &&
               t("agentInstall.launching")}
             {state.phase === "need_manual_launch" && t("agentInstall.needManual")}

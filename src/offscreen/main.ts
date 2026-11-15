@@ -179,6 +179,56 @@ async function handleOffscreenCommand(
       return manager.getSettings();
     case "update_settings":
       return manager.updateSettings(req.payload as Partial<Settings>);
+    case "download_agent_binary": {
+      const { url } = req.payload as { url: string };
+      const res = await fetch(url);
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status} ${res.statusText}`);
+      }
+      const totalBytes = Number(res.headers.get("content-length") || "0") || 0;
+      const chunks: BlobPart[] = [];
+      let bytesReceived = 0;
+      let lastReportAt = 0;
+
+      if (res.body) {
+        const reader = res.body.getReader();
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (value) {
+            const copy = new Uint8Array(value.byteLength);
+            copy.set(value);
+            chunks.push(copy);
+            bytesReceived += value.byteLength;
+            const now = Date.now();
+            if (now - lastReportAt >= 120) {
+              lastReportAt = now;
+              void sendToBackground("report_agent_install_progress", {
+                bytesReceived,
+                totalBytes,
+              }).catch(() => {});
+            }
+          }
+        }
+      } else {
+        const buf = new Uint8Array(await res.arrayBuffer());
+        chunks.push(buf);
+        bytesReceived = buf.byteLength;
+      }
+
+      const finalTotal = totalBytes > 0 ? totalBytes : bytesReceived;
+      void sendToBackground("report_agent_install_progress", {
+        bytesReceived,
+        totalBytes: finalTotal,
+      }).catch(() => {});
+
+      const blob = new Blob(chunks, { type: "application/octet-stream" });
+      const blobUrl = URL.createObjectURL(blob);
+      setTimeout(() => {
+        URL.revokeObjectURL(blobUrl);
+      }, 60000);
+      return { blobUrl, totalBytes: finalTotal };
+    }
     default:
       throw new Error(`Unsupported offscreen command: ${req.type}`);
   }

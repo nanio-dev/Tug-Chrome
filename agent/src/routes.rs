@@ -14,7 +14,7 @@ use librqbit::{AddTorrent, AddTorrentOptions, AddTorrentResponse};
 use serde::{Deserialize, Serialize};
 
 use crate::config::{DEFAULT_EXTRA_TRACKERS, DEFAULT_MAGNET_TRACKERS_ENCODED, HOST_NAME};
-use crate::registry::install_and_register;
+use crate::registry::{install_and_register, uninstall_self};
 use crate::state::{AppState, ManagedSessionEntry, now_secs, rand_u32};
 
 pub fn cors_headers() -> HeaderMap {
@@ -398,4 +398,21 @@ pub async fn handle_stop_session(
         "sessionId": id.to_string(),
     });
     with_cors(Json(body).into_response())
+}
+
+pub async fn handle_uninstall(State(state): State<Arc<AppState>>) -> Response {
+    {
+        let mut entries = state.entries.write().await;
+        let ids: Vec<usize> = entries.keys().copied().collect();
+        for id in ids {
+            let _ = state.bt_session.delete(TorrentIdOrHash::Id(id), true).await;
+            entries.remove(&id);
+        }
+    }
+    uninstall_self();
+    tokio::spawn(async {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        std::process::exit(0);
+    });
+    with_cors(Json(serde_json::json!({ "ok": true })).into_response())
 }
