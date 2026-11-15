@@ -2,7 +2,7 @@ import { sanitizeFileName } from "../../shared/filename";
 import { bytesToUtf8, decodeBencode, encodeBencode, type BencodeValue } from "./bencode";
 import { ALL_DEFAULT_TRACKERS } from "./tracker-client";
 
-export const DEFAULT_WEBTORRENT_TRACKERS = ALL_DEFAULT_TRACKERS;
+export const DEFAULT_WEBTORRENT_TRACKERS = ALL_DEFAULT_TRACKERS.filter(t => /^wss?:\/\//i.test(t));
 
 export interface TorrentFileLayout {
   index: number;

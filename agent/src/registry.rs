@@ -41,7 +41,10 @@ const BROWSER_TARGETS: &[BrowserTarget] = &[
             r"HKLM\Software\Google\Chrome",
             r"HKLM\Software\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe",
         ],
-        detect_local_appdata: &[r"Google\Chrome\User Data", r"Google\Chrome\Application\chrome.exe"],
+        detect_local_appdata: &[
+            r"Google\Chrome\User Data",
+            r"Google\Chrome\Application\chrome.exe",
+        ],
         detect_appdata: &[],
         detect_program_files: &[r"Google\Chrome\Application\chrome.exe"],
     },
@@ -89,7 +92,10 @@ const BROWSER_TARGETS: &[BrowserTarget] = &[
         nm_subkey: r"HKCU\Software\Opera Software\NativeMessagingHosts",
         detect_reg_keys: &[r"HKCU\Software\Opera Software"],
         detect_local_appdata: &[r"Programs\Opera\opera.exe", r"Programs\Opera GX\opera.exe"],
-        detect_appdata: &[r"Opera Software\Opera Stable", r"Opera Software\Opera GX Stable"],
+        detect_appdata: &[
+            r"Opera Software\Opera Stable",
+            r"Opera Software\Opera GX Stable",
+        ],
         detect_program_files: &[r"Opera\opera.exe"],
     },
     BrowserTarget {
@@ -104,7 +110,10 @@ const BROWSER_TARGETS: &[BrowserTarget] = &[
         _name: "360 极速浏览器",
         nm_subkey: r"HKCU\Software\360Chrome\Chrome\NativeMessagingHosts",
         detect_reg_keys: &[r"HKCU\Software\360Chrome"],
-        detect_local_appdata: &[r"360Chrome\Chrome\User Data", r"360Chrome\Chrome\Application\360chrome.exe"],
+        detect_local_appdata: &[
+            r"360Chrome\Chrome\User Data",
+            r"360Chrome\Chrome\Application\360chrome.exe",
+        ],
         detect_appdata: &[],
         detect_program_files: &[r"360\360Chrome\Chrome\Application\360chrome.exe"],
     },
@@ -112,7 +121,10 @@ const BROWSER_TARGETS: &[BrowserTarget] = &[
         _name: "360 极速浏览器 X",
         nm_subkey: r"HKCU\Software\360ChromeX\Chrome\NativeMessagingHosts",
         detect_reg_keys: &[r"HKCU\Software\360ChromeX"],
-        detect_local_appdata: &[r"360ChromeX\Chrome\User Data", r"360ChromeX\Chrome\Application\360chromex.exe"],
+        detect_local_appdata: &[
+            r"360ChromeX\Chrome\User Data",
+            r"360ChromeX\Chrome\Application\360chromex.exe",
+        ],
         detect_appdata: &[],
         detect_program_files: &[r"360ChromeX\Chrome\Application\360chromex.exe"],
     },
@@ -144,7 +156,10 @@ const BROWSER_TARGETS: &[BrowserTarget] = &[
         _name: "百分浏览器 (CentBrowser)",
         nm_subkey: r"HKCU\Software\CentBrowser\NativeMessagingHosts",
         detect_reg_keys: &[r"HKCU\Software\CentBrowser"],
-        detect_local_appdata: &[r"CentBrowser\User Data", r"CentBrowser\Application\chrome.exe"],
+        detect_local_appdata: &[
+            r"CentBrowser\User Data",
+            r"CentBrowser\Application\chrome.exe",
+        ],
         detect_appdata: &[],
         detect_program_files: &[r"CentBrowser\Application\chrome.exe"],
     },
@@ -192,7 +207,7 @@ fn is_browser_installed(target: &BrowserTarget) -> bool {
     target
         .detect_reg_keys
         .iter()
-        .any(|key| run_reg_silent(&["query", key]))
+        .any(|key| crate::windows_registry::exists(key))
 }
 
 #[cfg(target_os = "windows")]
@@ -215,12 +230,17 @@ pub fn install_and_register(ext_id: Option<&str>, force_registry: bool) -> anyho
 
     let mut origins: Vec<String> = Vec::new();
     let mut manifest_existed = false;
+    let mut manifest_path_matches = false;
     if manifest_path.exists()
         && let Ok(existing_str) = std::fs::read_to_string(&manifest_path)
         && let Ok(val) = serde_json::from_str::<serde_json::Value>(&existing_str)
         && let Some(arr) = val.get("allowed_origins").and_then(|v| v.as_array())
     {
         manifest_existed = true;
+        manifest_path_matches = val
+            .get("path")
+            .and_then(|v| v.as_str())
+            .is_some_and(|p| p.eq_ignore_ascii_case(&exe_path.to_string_lossy()));
         for item in arr {
             if let Some(s) = item.as_str() {
                 origins.push(s.to_owned());
@@ -234,6 +254,9 @@ pub fn install_and_register(ext_id: Option<&str>, force_registry: bool) -> anyho
             .trim()
             .trim_start_matches("chrome-extension://")
             .trim_matches('/');
+        if !crate::auth::valid_extension_id(clean_id) {
+            return Err(anyhow!("Invalid extension ID"));
+        }
         if !clean_id.is_empty() {
             let origin = format!("chrome-extension://{clean_id}/");
             if !origins.contains(&origin) {
@@ -243,11 +266,6 @@ pub fn install_and_register(ext_id: Option<&str>, force_registry: bool) -> anyho
         }
     }
 
-    // 若非强制重装、清单已存在且当前扩展 ID 早已注册，直接返回，不触发任何写盘或注册表命令
-    if !force_registry && manifest_existed && !origin_added {
-        return Ok(manifest_path);
-    }
-
     let manifest_json = serde_json::json!({
         "name": HOST_NAME,
         "description": "Tug Agent Stateless BitTorrent/DHT Local Agent",
@@ -255,60 +273,84 @@ pub fn install_and_register(ext_id: Option<&str>, force_registry: bool) -> anyho
         "type": "stdio",
         "allowed_origins": origins,
     });
-    std::fs::write(
-        &manifest_path,
-        serde_json::to_string_pretty(&manifest_json)?,
-    )?;
+    if force_registry || !manifest_existed || !manifest_path_matches || origin_added {
+        use std::io::Write;
+        let mut pending = tempfile::NamedTempFile::new_in(exe_dir)?;
+        pending.write_all(serde_json::to_string_pretty(&manifest_json)?.as_bytes())?;
+        pending.persist(&manifest_path).map_err(|err| err.error)?;
+    }
 
     #[cfg(target_os = "windows")]
-    if force_registry || !manifest_existed {
-        cleanup_legacy_registry();
+    {
+        if force_registry {
+            cleanup_legacy_registry();
+        }
 
         let manifest_str = manifest_path.to_string_lossy().into_owned();
         for target in BROWSER_TARGETS {
             if is_browser_installed(target) {
                 let key = format!(r"{}\{HOST_NAME}", target.nm_subkey);
-                let _ = run_reg_silent(&["add", &key, "/ve", "/t", "REG_SZ", "/d", &manifest_str, "/f"]);
+                if force_registry
+                    || crate::windows_registry::string(&key, "").as_deref() != Some(&manifest_str)
+                {
+                    anyhow::ensure!(
+                        run_reg_silent(&[
+                            "add",
+                            &key,
+                            "/ve",
+                            "/t",
+                            "REG_SZ",
+                            "/d",
+                            &manifest_str,
+                            "/f",
+                        ]),
+                        "Failed to register Native Messaging host: {key}"
+                    );
+                }
             }
         }
 
         let proto_root = format!(r"HKCU\Software\Classes\{PROTOCOL_SCHEME}");
         let proto_cmd = format!(r"HKCU\Software\Classes\{PROTOCOL_SCHEME}\shell\open\command");
         let cmd_val = format!("\"{}\" \"%1\"", exe_path.to_string_lossy());
-        let _ = run_reg_silent(&[
-            "add",
-            &proto_root,
-            "/ve",
-            "/t",
-            "REG_SZ",
-            "/d",
-            "URL:Tug Agent Protocol",
-            "/f",
-        ]);
-        let _ = run_reg_silent(&[
-            "add",
-            &proto_root,
-            "/v",
-            "URL Protocol",
-            "/t",
-            "REG_SZ",
-            "/d",
-            "",
-            "/f",
-        ]);
-        let _ = run_reg_silent(&["add", &proto_cmd, "/ve", "/t", "REG_SZ", "/d", &cmd_val, "/f"]);
+        for (key, name, value) in [
+            (&proto_root, "", "URL:Tug Agent Protocol"),
+            (&proto_root, "URL Protocol", ""),
+            (&proto_cmd, "", cmd_val.as_str()),
+        ] {
+            if force_registry
+                || crate::windows_registry::string(key, name).as_deref() != Some(value)
+            {
+                let mut args = vec!["add", key];
+                if name.is_empty() {
+                    args.push("/ve");
+                } else {
+                    args.extend(["/v", name]);
+                }
+                args.extend(["/t", "REG_SZ", "/d", value, "/f"]);
+                anyhow::ensure!(run_reg_silent(&args), "Failed to register protocol: {key}");
+            }
+        }
     }
 
     Ok(manifest_path)
 }
 
+/// The browser saves the fixed package under a per-extension installer name.
+fn extension_id_from_installer(path: &std::path::Path) -> Option<String> {
+    let id = path.file_stem()?.to_str()?.strip_prefix("tug-agent-")?;
+    crate::auth::valid_extension_id(id).then(|| id.to_owned())
+}
+
 /// 解析命令行参数并执行必要的注册表/清单绑定。
 /// 返回 `(is_native_messaging, install_only)`。
-pub fn parse_cli_and_register() -> (bool, bool) {
+pub fn parse_cli_and_register() -> anyhow::Result<(bool, bool)> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut is_native_messaging = false;
     let mut install_only = false;
-    let mut ext_id: Option<String> = None;
+    let mut ext_id = std::env::current_exe()
+        .ok()
+        .and_then(|p| extension_id_from_installer(&p));
     let mut migrated_from: Option<PathBuf> = None;
 
     let mut i = 0;
@@ -325,12 +367,12 @@ pub fn parse_cli_and_register() -> (bool, bool) {
         } else if arg.starts_with("chrome-extension://") {
             is_native_messaging = true;
             ext_id = Some(arg.clone());
-        } else if arg.starts_with("tug-agent://") || arg.starts_with("tug-web://") {
-            if let Ok(parsed) = url::Url::parse(arg) {
-                for (k, v) in parsed.query_pairs() {
-                    if k == "extId" || k == "id" {
-                        ext_id = Some(v.into_owned());
-                    }
+        } else if (arg.starts_with("tug-agent://") || arg.starts_with("tug-web://"))
+            && let Ok(parsed) = url::Url::parse(arg)
+        {
+            for (k, v) in parsed.query_pairs() {
+                if k == "extId" || k == "id" {
+                    ext_id = Some(v.into_owned());
                 }
             }
         }
@@ -348,8 +390,8 @@ pub fn parse_cli_and_register() -> (bool, bool) {
         });
     }
 
-    let _ = install_and_register(ext_id.as_deref(), install_only);
-    (is_native_messaging, install_only)
+    install_and_register(ext_id.as_deref(), install_only)?;
+    Ok((is_native_messaging, install_only))
 }
 
 #[cfg(target_os = "windows")]
@@ -368,7 +410,9 @@ pub fn maybe_migrate_to_app_dir() -> bool {
     #[cfg(target_os = "windows")]
     {
         let args: Vec<String> = std::env::args().skip(1).collect();
-        if args.iter().any(|a| a.starts_with("chrome-extension://") || a == "--migrated-from" || a == "--no-migrate") {
+        if args.iter().any(|a| {
+            a.starts_with("chrome-extension://") || a == "--migrated-from" || a == "--no-migrate"
+        }) {
             return false;
         }
 
@@ -404,8 +448,12 @@ pub fn maybe_migrate_to_app_dir() -> bool {
         }
 
         let mut cmd = Command::new(&target_exe);
+        let installer_id = extension_id_from_installer(&current_exe);
         for arg in args {
             cmd.arg(arg);
+        }
+        if let Some(id) = installer_id {
+            cmd.arg("--ext-id").arg(id);
         }
         cmd.arg("--migrated-from").arg(&current_exe);
         cmd.creation_flags(CREATE_NO_WINDOW);
@@ -432,11 +480,11 @@ pub fn uninstall_self() {
             }
         }
 
-        if let Ok(exe_path) = std::env::current_exe() {
-            if let Some(dir) = exe_path.parent() {
-                let _ = std::fs::remove_file(dir.join(format!("{HOST_NAME}.json")));
-                let _ = std::fs::remove_file(dir.join(format!("{LEGACY_HOST_NAME}.json")));
-            }
+        if let Ok(exe_path) = std::env::current_exe()
+            && let Some(dir) = exe_path.parent()
+        {
+            let _ = std::fs::remove_file(dir.join(format!("{HOST_NAME}.json")));
+            let _ = std::fs::remove_file(dir.join(format!("{LEGACY_HOST_NAME}.json")));
         }
 
         if let Some(app_dir) = resolve_persistent_agent_dir() {
@@ -445,7 +493,9 @@ pub fn uninstall_self() {
 
         let _ = std::fs::remove_dir_all(std::env::temp_dir().join("tug-agent-stage"));
 
-        if let (Ok(exe_path), Some(app_dir)) = (std::env::current_exe(), resolve_persistent_agent_dir()) {
+        if let (Ok(exe_path), Some(app_dir)) =
+            (std::env::current_exe(), resolve_persistent_agent_dir())
+        {
             let exe_lower = exe_path.to_string_lossy().to_ascii_lowercase();
             let dir_lower = app_dir.to_string_lossy().to_ascii_lowercase();
             if exe_lower.starts_with(&dir_lower) {
@@ -459,6 +509,30 @@ pub fn uninstall_self() {
                 cmd.creation_flags(CREATE_NO_WINDOW);
                 let _ = cmd.spawn();
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod installer_tests {
+    use super::*;
+    #[test]
+    fn binds_only_a_valid_extension_id_from_the_installer_name() {
+        let id = "abcdefghijklmnopabcdefghijklmnop";
+        assert_eq!(
+            extension_id_from_installer(std::path::Path::new(&format!("tug-agent-{id}.exe"))),
+            Some(id.to_owned())
+        );
+        for name in [
+            "tug-agent.exe",
+            "tug-agent-evil.exe",
+            "tug-agent-abcdefghijklmnopabcdefghijklmnop (1).exe",
+            "other-abcdefghijklmnopabcdefghijklmnop.exe",
+        ] {
+            assert_eq!(
+                extension_id_from_installer(std::path::Path::new(name)),
+                None
+            );
         }
     }
 }

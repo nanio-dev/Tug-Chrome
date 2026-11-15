@@ -9,7 +9,11 @@
     "dev": "vite build --watch",
     "check": "tsc --noEmit",
     "build": "tsc --noEmit && vite build && node scripts/build-extension.mjs",
-    "test": "node --import ./tests/register-loader.mjs --test tests/*.test.ts"
+    "test": "node --import ./tests/register-loader.mjs --test tests/*.test.ts",
+    "test:browser": "npm run build && node --test tests/browser/*.test.mjs",
+    "test:agent": "cargo build --manifest-path agent/Cargo.toml --offline && node --test tests/agent-integration.test.mjs",
+    "bench:http": "npm run build && node scripts/benchmark-http.mjs",
+    "bench:agent-http": "npm run build && node scripts/benchmark-agent-http.mjs"
   },
   "dependencies": {
     "react": "^19.1.0",
@@ -21,6 +25,7 @@
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^6.0.2",
+    "playwright-core": "^1.63.0",
     "typescript": "~6.0.3",
     "vite": "^8.0.16"
   }

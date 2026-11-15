@@ -17,7 +17,8 @@ import {
 import {
   checkHelperHealth,
   deleteFileViaHelper,
-  NATIVE_HELPER_HOST_NAME,
+  connectHelperNative,
+  disconnectHelperNative,
   openFileViaHelper,
   registerExtIdWithHelper,
   uninstallViaHelper,
@@ -25,6 +26,7 @@ import {
 import { parseTorrentBuffer, uint8ArrayToBase64 } from "../engine/torrent/parser";
 import {
   DEFAULT_SETTINGS,
+  isActiveTaskState,
   normalizeSettings,
   type AddTaskInput,
   type Settings,
@@ -34,6 +36,7 @@ import {
 let creatingOffscreen: Promise<void> | null = null;
 const selfExportedDownloadIds = new Set<number>();
 const pendingBlobExports = new Map<string, string>();
+const activeExports = new Map<string, { canceled: boolean; downloadId: number | null }>();
 let cachedSettings: Settings = { ...DEFAULT_SETTINGS };
 let settingsInitialized = false;
 let settingsInitPromise: Promise<void> | null = null;
@@ -61,6 +64,7 @@ async function loadCachedSettings(forceRefresh = false): Promise<Settings> {
 chrome.storage?.onChanged.addListener((changes, areaName) => {
   if (areaName === "local" && changes.tugWebSettings?.newValue) {
     cachedSettings = normalizeSettings(changes.tugWebSettings.newValue as Partial<Settings>);
+    if (cachedSettings.standaloneMode) disconnectHelperNative();
     settingsInitialized = true;
   }
 });
@@ -221,6 +225,8 @@ if (chrome.downloads?.onDeterminingFilename) {
 async function exportBlobToDownloads(
   payload: ExportBlobPayload,
 ): Promise<{ downloadId: number | null; savedPath?: string | null }> {
+  const control = { canceled: false, downloadId: null as number | null };
+  activeExports.set(payload.exportId, control);
   const segments = payload.relativePath
     .replace(/\\/g, "/")
     .split("/")
@@ -265,7 +271,9 @@ async function exportBlobToDownloads(
       throw new Error("已取消保存文件（点击「继续」可重新保存，无需重新下载）");
     }
 
+    control.downloadId = downloadId;
     selfExportedDownloadIds.add(downloadId);
+    if (control.canceled) await chrome.downloads.cancel(downloadId).catch(() => {});
     let wasErased = false;
     let interruptedError: string | null = null;
 
@@ -351,6 +359,7 @@ async function exportBlobToDownloads(
     return { downloadId, savedPath: item.filename };
   } finally {
     pendingBlobExports.delete(payload.blobUrl);
+    activeExports.delete(payload.exportId);
   }
 }
 
@@ -387,25 +396,28 @@ async function ensureExtIdRegisteredOnce(): Promise<void> {
   }
 }
 
-async function activateNativeHelperViaProtocol(): Promise<NativeHelperStatus> {
+async function activateNativeHelperViaProtocol(protocolTabId?: number): Promise<NativeHelperStatus> {
   const existing = await checkHelperHealth(800);
   if (existing.available) {
+    if (protocolTabId !== undefined) await chrome.tabs.remove(protocolTabId).catch(() => {});
     await ensureExtIdRegisteredOnce();
     return existing;
   }
 
   const protoUrl = `tug-agent://register?extId=${encodeURIComponent(chrome.runtime.id)}`;
-  let helperTabId: number | undefined;
+  let helperTabId = protocolTabId;
   try {
-    const tab = await chrome.tabs.create({ url: protoUrl, active: true });
-    helperTabId = tab.id;
+    if (helperTabId === undefined) {
+      const tab = await chrome.tabs.create({ url: protoUrl, active: true });
+      helperTabId = tab.id;
+    }
   } catch {
     // ignore
   }
 
   for (let i = 0; i < 18; i += 1) {
     await new Promise((r) => setTimeout(r, 400));
-    const status = await checkHelperHealth(700);
+    const status = await connectHelperNative(1500, message => logDiag("pair", message));
     if (status.available) {
       await ensureExtIdRegisteredOnce();
       if (helperTabId !== undefined) {
@@ -436,50 +448,12 @@ async function ensureNativeHelperRunning(options?: {
     return { ...initial, installed: true };
   }
 
-  if (chrome.runtime?.connectNative) {
-    try {
-      let disconnected = false;
-      const port = chrome.runtime.connectNative(NATIVE_HELPER_HOST_NAME);
-      port.onDisconnect.addListener(() => {
-        disconnected = true;
-        const errMsg = chrome.runtime.lastError?.message;
-        if (errMsg) {
-          logDiag("probe", `connectNative disconnected: ${errMsg}`);
-        }
-      });
-      try {
-        port.postMessage({ action: "ping", extId: chrome.runtime.id });
-      } catch (err) {
-        logDiag("probe", `connectNative postMessage err: ${String(err)}`);
-      }
-
-      // 最多短时唤醒探测 ~4.8s；若宿主未安装/已被卸载，onDisconnect 会立即触发并提前结束
-      for (let i = 0; i < 16; i += 1) {
-        await new Promise((r) => setTimeout(r, 300));
-        const status = await checkHelperHealth(disconnected ? 250 : 600);
-        if (status.available) {
-          setAgentReadyBadge(false);
-          logDiag("probe", `agent woke via connectNative (port=${status.port})`);
-          void ensureExtIdRegisteredOnce();
-          try {
-            port.disconnect();
-          } catch {
-            // ignore
-          }
-          return { ...status, installed: true };
-        }
-        if (disconnected) {
-          break;
-        }
-      }
-      try {
-        port.disconnect();
-      } catch {
-        // ignore
-      }
-    } catch {
-      // ignore native messaging errors
-    }
+  const native = await connectHelperNative(8000, message => logDiag("probe", message));
+  if (native.available) {
+    setAgentReadyBadge(false);
+    logDiag("probe", "Agent connected and authenticated via Native Messaging");
+    await ensureExtIdRegisteredOnce();
+    return { ...native, installed: true };
   }
 
   if (options?.allowProtocolFallback) {
@@ -488,11 +462,10 @@ async function ensureNativeHelperRunning(options?: {
   }
 
   const finalStatus = await checkHelperHealth(500);
-  return { ...finalStatus, installed: finalStatus.available };
+  return { ...native, ...finalStatus, installed: finalStatus.installed || native.installed };
 }
 
-const AGENT_DOWNLOAD_URL =
-  "https://raw.githubusercontent.com/nanio-dev/Tug-Web/main/agent/tug-agent.exe";
+const AGENT_DOWNLOAD_URL = "https://raw.githubusercontent.com/nanio-dev/Tug-Web/main/agent/tug-agent.exe";
 const DIAG_LOGS_STORAGE_KEY = "tugWebDiagLogs";
 const MAX_DIAG_LOGS = 120;
 let diagLogsCache: string[] | null = null;
@@ -529,17 +502,18 @@ let agentInstallState: AgentInstallState = {
   downloadId: null,
 };
 
-async function waitForAgentHealthAndRegister(timeoutMs: number): Promise<boolean> {
+async function waitForAgentHealthAndRegister(timeoutMs: number): Promise<NativeHelperStatus> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const st = await checkHelperHealth(450);
+    const st = await ensureNativeHelperRunning({ allowProtocolFallback: false });
     if (st.available) {
       await ensureExtIdRegisteredOnce();
-      return true;
+      return st;
     }
+    if (st.updateRequired || st.pairingRequired) return st;
     await new Promise((r) => setTimeout(r, 350));
   }
-  return false;
+  return { available: false };
 }
 
 function setAgentReadyBadge(pendingLaunch: boolean): void {
@@ -553,28 +527,58 @@ function setAgentReadyBadge(pendingLaunch: boolean): void {
 }
 
 let pendingAgentBlobUrl: string | null = null;
+let installGeneration = 0;
+let installStateLoading: Promise<void> | null = null;
+let installStateSave: Promise<unknown> = Promise.resolve();
+let lastInstallSave = 0;
+const INSTALL_SESSION_KEY = "tugAgentInstallSession";
+function setAgentInstallState(next: AgentInstallState): void {
+  const phaseChanged = agentInstallState.phase !== next.phase;
+  agentInstallState = next;
+  if (!phaseChanged && next.phase === "downloading" && Date.now() - lastInstallSave < 1000) return;
+  lastInstallSave = Date.now();
+  const saved = { state: { ...next }, blobUrl: pendingAgentBlobUrl };
+  installStateSave = installStateSave.catch(() => {}).then(() => chrome.storage.session.set({ [INSTALL_SESSION_KEY]: saved }));
+}
+function loadAgentInstallState(): Promise<void> {
+  if (!installStateLoading) installStateLoading = (async () => {
+    const saved = (await chrome.storage.session.get(INSTALL_SESSION_KEY))[INSTALL_SESSION_KEY] as { state?: AgentInstallState; blobUrl?: string } | undefined;
+    if (!saved?.state) return;
+    agentInstallState = saved.state;
+    pendingAgentBlobUrl = typeof saved.blobUrl === "string" ? saved.blobUrl : null;
+    if (["checking", "downloading", "launching", "waiting_ready"].includes(agentInstallState.phase)) {
+      setAgentInstallState({ ...agentInstallState, phase: "error", message: "安装流程被中断，请重试连接" });
+    }
+  })().catch(() => {});
+  return installStateLoading;
+}
 
 async function launchDownloadedAgentById(downloadId: number): Promise<AgentInstallState> {
   logDiag("activate", `launching from UI gesture for downloadId=${downloadId}`);
-  agentInstallState = {
+  setAgentInstallState({
     ...agentInstallState,
     phase: "waiting_ready",
     downloadId,
     message: undefined,
-  };
-  const ok = await waitForAgentHealthAndRegister(12000);
-  if (ok) {
+  });
+  const status = await waitForAgentHealthAndRegister(15000);
+  if (status.available) {
     logDiag("activate", `agent health OK and registered for downloadId=${downloadId}`);
-    agentInstallState = { ...agentInstallState, phase: "ready", downloadId };
+    setAgentInstallState({ ...agentInstallState, phase: "ready", downloadId });
     setAgentReadyBadge(false);
+  } else if (status.pairingRequired) {
+    setAgentInstallState({ ...agentInstallState, phase: "need_pairing", downloadId });
+    logDiag("activate", "Agent is running; browser pairing is required");
   } else {
-    logDiag("activate", `agent health timeout (12s) for downloadId=${downloadId}`);
-    agentInstallState = {
+    logDiag("activate", `agent activation incomplete (15s) for downloadId=${downloadId}`);
+    setAgentInstallState({
       ...agentInstallState,
       phase: "error",
       downloadId,
-      message: "启动超时，请重试",
-    };
+      message: status.updateRequired
+        ? "检测到旧版 Agent，请先退出旧进程，再运行当前构建的 agent/tug-agent.exe 后连接"
+        : "未能连接 Agent：请确认程序已运行，并允许浏览器的本地应用连接",
+    });
     setAgentReadyBadge(false);
   }
   return agentInstallState;
@@ -583,44 +587,46 @@ async function launchDownloadedAgentById(downloadId: number): Promise<AgentInsta
 async function exportDownloadedAgent(): Promise<AgentInstallState> {
   const blobUrl = pendingAgentBlobUrl;
   if (!blobUrl) {
-    agentInstallState = {
+    setAgentInstallState({
       phase: "error",
       bytesReceived: 0,
       totalBytes: 0,
       downloadId: null,
       message: "缓存数据已过期，请重试",
-    };
+    });
     return agentInstallState;
   }
 
   try {
-    pendingBlobExports.set(blobUrl, "tug-agent.exe");
+    const installerName = `tug-agent-${chrome.runtime.id}.exe`;
+    pendingBlobExports.set(blobUrl, installerName);
     const downloadId = await chrome.downloads.download({
       url: blobUrl,
-      filename: "tug-agent.exe",
+      filename: installerName,
       conflictAction: "overwrite",
       saveAs: false,
     });
     selfExportedDownloadIds.add(downloadId);
     logDiag("activate", `chrome.downloads.download returned id=${downloadId}`);
-    agentInstallState = {
+    setAgentInstallState({
       ...agentInstallState,
       phase: "confirming_save",
       downloadId,
-    };
+    });
 
     void (async () => {
       for (let i = 0; i < 600; i += 1) {
         await new Promise((r) => setTimeout(r, 150));
         const items = await chrome.downloads.search({ id: downloadId }).catch(() => []);
         const item = items[0];
+        if (agentInstallState.downloadId !== downloadId) return;
         if (!item) {
           logDiag("activate", `downloadId=${downloadId} search returned empty`);
-          agentInstallState = {
+          setAgentInstallState({
             ...agentInstallState,
             phase: "error",
             message: "下载记录不存在",
-          };
+          });
           return;
         }
         if (item.state === "in_progress") {
@@ -629,11 +635,11 @@ async function exportDownloadedAgent(): Promise<AgentInstallState> {
         if (item.state === "complete") {
           logDiag("activate", `downloadId=${downloadId} state=complete (filename=${item.filename || ""})`);
           pendingAgentBlobUrl = null;
-          agentInstallState = {
+          setAgentInstallState({
             ...agentInstallState,
             phase: "need_manual_launch",
             downloadId,
-          };
+          });
           setAgentReadyBadge(true);
           if (chrome.notifications?.create) {
             void chrome.notifications.create(`tug-agent-launch-${downloadId}`, {
@@ -648,11 +654,11 @@ async function exportDownloadedAgent(): Promise<AgentInstallState> {
         if (item.state === "interrupted") {
           logDiag("activate", `downloadId=${downloadId} state=interrupted (error=${item.error || ""})`);
           pendingAgentBlobUrl = null;
-          agentInstallState = {
+          setAgentInstallState({
             ...agentInstallState,
             phase: "error",
             message: item.error || "已取消保存",
-          };
+          });
           return;
         }
       }
@@ -662,43 +668,50 @@ async function exportDownloadedAgent(): Promise<AgentInstallState> {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logDiag("activate", `exportDownloadedAgent error: ${msg}`);
-    agentInstallState = {
+    setAgentInstallState({
       ...agentInstallState,
       phase: "error",
       message: msg,
-    };
+    });
     return agentInstallState;
   }
 }
 
 async function startInstallNativeAgent(): Promise<AgentInstallState> {
+  if (["checking", "downloading", "confirming_save", "launching", "waiting_ready", "need_manual_launch"].includes(agentInstallState.phase)) return agentInstallState;
+  const attempt = ++installGeneration;
   pendingAgentBlobUrl = null;
   setAgentReadyBadge(false);
-  agentInstallState = {
+  setAgentInstallState({
     phase: "checking",
     bytesReceived: 0,
     totalBytes: 0,
     downloadId: null,
-  };
+  });
 
   // 若本机已安装且能唤醒，直接激活完成
   const existing = await ensureNativeHelperRunning({ allowProtocolFallback: false });
   if (existing.available) {
-    agentInstallState = {
+    setAgentInstallState({
       phase: "ready",
       bytesReceived: 0,
       totalBytes: 0,
       downloadId: null,
-    };
+    });
     return agentInstallState;
   }
 
-  agentInstallState = {
+  if (existing.pairingRequired) {
+    setAgentInstallState({ phase: "need_pairing", bytesReceived: 0, totalBytes: 0, downloadId: null });
+    return agentInstallState;
+  }
+
+  setAgentInstallState({
     phase: "downloading",
     bytesReceived: 0,
     totalBytes: 0,
     downloadId: null,
-  };
+  });
 
   void (async () => {
     try {
@@ -709,23 +722,25 @@ async function startInstallNativeAgent(): Promise<AgentInstallState> {
       >("download_agent_binary", { url: `${AGENT_DOWNLOAD_URL}?t=${Date.now()}` });
       logDiag("activate", `offscreen download complete (${totalBytes} bytes), waiting for user confirm`);
 
+      if (attempt !== installGeneration) return;
       pendingAgentBlobUrl = blobUrl;
-      agentInstallState = {
+      setAgentInstallState({
         phase: "confirming_save",
         bytesReceived: totalBytes,
         totalBytes,
         downloadId: null,
-      };
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      if (attempt !== installGeneration) return;
       logDiag("activate", `startInstallNativeAgent error: ${msg}`);
-      agentInstallState = {
+      setAgentInstallState({
         phase: "error",
         bytesReceived: 0,
         totalBytes: 0,
         downloadId: null,
         message: msg,
-      };
+      });
     }
   })();
 
@@ -790,6 +805,7 @@ function tryOpenBrowserDownload(downloadId: number): boolean {
 
 async function handleBackgroundCommand(req: ExtensionRequest): Promise<unknown> {
   await loadCachedSettings();
+  await loadAgentInstallState();
 
   switch (req.type) {
     case "get_native_helper_status": {
@@ -809,11 +825,11 @@ async function handleBackgroundCommand(req: ExtensionRequest): Promise<unknown> 
       return ensureNativeHelperRunning(
         req.payload as { allowProtocolFallback?: boolean } | undefined,
       );
-    case "activate_native_helper_protocol":
-      if (cachedSettings.standaloneMode) {
-        return { available: false, standaloneMode: true };
-      }
-      return activateNativeHelperViaProtocol();
+    case "activate_native_helper_protocol": {
+      const status = await activateNativeHelperViaProtocol((req.payload as { protocolTabId?: number })?.protocolTabId);
+      if (status.available) setAgentInstallState({ ...agentInstallState, phase: "ready", message: undefined });
+      return status;
+    }
     case "install_native_agent":
       return startInstallNativeAgent();
     case "get_agent_install_state":
@@ -821,11 +837,11 @@ async function handleBackgroundCommand(req: ExtensionRequest): Promise<unknown> 
     case "report_agent_install_progress": {
       const p = req.payload as { bytesReceived: number; totalBytes: number };
       if (agentInstallState.phase === "downloading") {
-        agentInstallState = {
+        setAgentInstallState({
           ...agentInstallState,
           bytesReceived: p.bytesReceived,
           totalBytes: p.totalBytes,
-        };
+        });
       }
       return { ok: true };
     }
@@ -836,14 +852,15 @@ async function handleBackgroundCommand(req: ExtensionRequest): Promise<unknown> 
       return launchDownloadedAgentById(payload.downloadId);
     }
     case "reset_agent_install_state":
+      installGeneration++;
       pendingAgentBlobUrl = null;
       setAgentReadyBadge(false);
-      agentInstallState = {
+      setAgentInstallState({
         phase: "idle",
         bytesReceived: 0,
         totalBytes: 0,
         downloadId: null,
-      };
+      });
       return agentInstallState;
     case "uninstall_native_agent": {
       let status = await checkHelperHealth(500);
@@ -854,6 +871,7 @@ async function handleBackgroundCommand(req: ExtensionRequest): Promise<unknown> 
         return { uninstalled: false };
       }
       const ok = await uninstallViaHelper();
+      if (ok) disconnectHelperNative();
       logDiag("uninstall", `uninstallViaHelper result=${ok}`);
       extIdRegisteredInSession = false;
       setAgentReadyBadge(false);
@@ -874,6 +892,14 @@ async function handleBackgroundCommand(req: ExtensionRequest): Promise<unknown> 
       return { ok: true };
     case "export_blob_to_downloads":
       return exportBlobToDownloads(req.payload as ExportBlobPayload);
+    case "cancel_task_export": {
+      const active = activeExports.get((req.payload as { exportId: string }).exportId);
+      if (active) {
+        active.canceled = true;
+        if (active.downloadId !== null) await chrome.downloads.cancel(active.downloadId).catch(() => {});
+      }
+      return { ok: true };
+    }
     case "open_manager_tab":
       await openManagerTab((req.payload as { initialUrl?: string })?.initialUrl);
       return { ok: true };
@@ -990,6 +1016,7 @@ async function handleBackgroundCommand(req: ExtensionRequest): Promise<unknown> 
     case "update_settings": {
       const updated = await forwardToOffscreen<Settings>("update_settings", req.payload);
       cachedSettings = updated;
+      if (updated.standaloneMode) disconnectHelperNative();
       settingsInitialized = true;
       return updated;
     }
@@ -1158,6 +1185,7 @@ chrome.runtime.onMessage.addListener((message: unknown) => {
   const { event } = message as ExtensionBroadcastMessage;
   if (event.type === "settings") {
     cachedSettings = event.settings;
+    if (event.settings.standaloneMode) disconnectHelperNative();
     settingsInitialized = true;
     return;
   }
@@ -1185,12 +1213,7 @@ chrome.runtime.onMessage.addListener((message: unknown) => {
   // 更新工具栏图标上的活跃任务数角标
   void forwardToOffscreen<TaskView[]>("list_tasks")
     .then((tasks) => {
-      const activeCount = tasks.filter(
-        (t) =>
-          t.state === "downloading" ||
-          t.state === "fetching_metadata" ||
-          t.state === "queued",
-      ).length;
+      const activeCount = tasks.filter(t => isActiveTaskState(t.state)).length;
       chrome.action?.setBadgeBackgroundColor({ color: "#676728" });
       chrome.action?.setBadgeText({
         text: activeCount > 0 ? String(activeCount) : "",

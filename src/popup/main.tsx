@@ -36,6 +36,7 @@ import {
   ExternalIcon,
   FolderIcon,
   PauseIcon,
+  PlusIcon,
   PlayIcon,
   TrashIcon,
 } from "../shared/icons";
@@ -43,6 +44,7 @@ import { I18nProvider, useI18n } from "../shared/i18n";
 import "../shared/styles.css";
 import {
   DEFAULT_SETTINGS,
+  isActiveTaskState,
   type Settings,
   type TaskView,
 } from "../shared/types";
@@ -52,6 +54,8 @@ function PopupInner({
   tasks,
   helperStatus,
   checkingHelper,
+  loading,
+  loadError,
   onEnableAgent,
   onRefreshHelper,
   onRefresh,
@@ -61,6 +65,8 @@ function PopupInner({
   tasks: TaskView[];
   helperStatus: NativeHelperStatus | null;
   checkingHelper: boolean;
+  loading: boolean;
+  loadError: string | null;
   onEnableAgent: () => Promise<void>;
   onRefreshHelper: () => Promise<void>;
   onRefresh: () => Promise<void>;
@@ -68,6 +74,8 @@ function PopupInner({
 }) {
   const { t } = useI18n();
   const [urlInput, setUrlInput] = useState("");
+  const [adding, setAdding] = useState(false);
+  const addingRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [agentInstallOpen, setAgentInstallOpen] = useState(false);
 
@@ -79,7 +87,8 @@ function PopupInner({
           st.phase === "confirming_save" ||
           st.phase === "launching" ||
           st.phase === "waiting_ready" ||
-          st.phase === "need_manual_launch"
+          st.phase === "need_manual_launch" ||
+          st.phase === "need_pairing"
         ) {
           setAgentInstallOpen(true);
         }
@@ -98,7 +107,7 @@ function PopupInner({
   const fileRef = useRef<HTMLInputElement | null>(null);
 
   const totalSpeed = useMemo(
-    () => tasks.reduce((acc, item) => acc + (item.speedBps || 0), 0),
+    () => tasks.reduce((acc, item) => acc + (isActiveTaskState(item.state) ? item.speedBps || 0 : 0), 0),
     [tasks],
   );
   const speedFormatted = formatSpeed(totalSpeed);
@@ -201,258 +210,144 @@ function PopupInner({
     }
   };
 
+  const agentChecking = !settings.standaloneMode && (loading || checkingHelper || !helperStatus);
+  const agentLabel = settings.standaloneMode ? t("popup.browserMode")
+    : agentChecking ? t("sidebar.helperConnecting")
+      : helperStatus?.available ? t("popup.agentConnected")
+        : t(helperStatus?.updateRequired ? "sidebar.helperUpdateRequired" : "sidebar.helperStandby");
+  const runAction = async (action: () => Promise<unknown>) => {
+    setError(null);
+    try { await action(); } catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+  };
+  const submit = async () => {
+    if (addingRef.current || !urlInput.trim()) return;
+    addingRef.current = true;
+    setAdding(true);
+    try { await runAction(handleQuickSubmit); }
+    finally { addingRef.current = false; setAdding(false); }
+  };
+  const visibleTasks = [...tasks].sort((a, b) => Number(isActiveTaskState(b.state)) - Number(isActiveTaskState(a.state)));
+
   return (
     <div className="popup-shell">
       <header className="popup-head">
         <div className="popup-brand">
-          <img src="/icons/icon-128.png" alt="Tug Web" />
-          <strong>{t("app.name")}</strong>
+          <img src="/icons/icon-128.png" alt="" width="34" height="34" />
+          <div className="popup-brand-copy">
+            <strong>{t("app.name")}</strong>
+            <button type="button"
+              className={`popup-agent ${helperStatus?.available && !settings.standaloneMode ? "connected" : ""}`}
+              disabled={loading || agentChecking || (!settings.standaloneMode && !!helperStatus?.available)}
+              title={settings.standaloneMode ? t("sidebar.enableAgentHint") : agentLabel}
+              onClick={() => settings.standaloneMode ? void runAction(onEnableAgent) : setAgentInstallOpen(true)}>
+              <span className="popup-agent-dot" aria-hidden="true" />
+              <span>{agentLabel}</span>
+            </button>
+          </div>
         </div>
-        {settings.standaloneMode ? (
-          <span
-            className="muted"
-            style={{
-              fontSize: "11px",
-              cursor: "pointer",
-              textDecoration: "underline",
-            }}
-            title={t("sidebar.enableAgentHint")}
-            onClick={() => void onEnableAgent()}
-          >
-            ○ Agent:{t("sidebar.helperDisabled")}
-          </span>
-        ) : (
-          <span
-            className={helperStatus?.available ? "ok" : "muted"}
-            style={{
-              fontSize: "11px",
-              cursor: helperStatus?.available || checkingHelper ? "default" : "pointer",
-              textDecoration: helperStatus?.available || checkingHelper ? "none" : "underline",
-            }}
-            title={t("sidebar.helperLabel")}
-            onClick={() => {
-              if (!helperStatus?.available && !checkingHelper) {
-                setAgentInstallOpen(true);
-              }
-            }}
-          >
-            {helperStatus?.available
-              ? `● Agent:${t("popup.agentEnabled")}`
-              : checkingHelper
-                ? `○ ${t("sidebar.helperConnecting")}`
-                : `○ ${t("sidebar.helperStandby")}`}
-          </span>
-        )}
-        <span className="popup-speed-pill">↓ {speedFormatted.full}</span>
-        <button
-          type="button"
-          className="btn btn-sm"
-          onClick={() => void openManagerTab()}
-        >
-          {t("popup.openManager")}
-        </button>
+        <div className="popup-speed" aria-label={`${t("popup.totalSpeed")}: ${speedFormatted.full}`}>
+          <span>{t("popup.totalSpeed")}</span>
+          <strong><span aria-hidden="true">↓ </span>{speedFormatted.full}</strong>
+        </div>
       </header>
 
-      <div className="popup-quick">
-        <input
-          type="text"
-          value={urlInput}
-          onChange={(e) => setUrlInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") void handleQuickSubmit();
-          }}
-          placeholder={t("add.urlPlaceholder")}
-        />
-        <input
-          ref={fileRef}
-          type="file"
-          accept=".torrent,application/x-bittorrent"
-          style={{ display: "none" }}
-          onChange={(e) => {
-            const f = e.target.files?.[0];
-            e.currentTarget.value = "";
-            if (f) void handlePickTorrent(f);
-          }}
-        />
-        <button
-          type="button"
-          className="btn btn-sm"
-          title={t("add.pickTorrent")}
-          onClick={() => fileRef.current?.click()}
-        >
-          .torrent
-        </button>
-        <button
-          type="button"
-          className="btn btn-sm btn-primary"
-          onClick={() => void handleQuickSubmit()}
-        >
-          {t("popup.quickAdd")}
-        </button>
-      </div>
-
-      {error && (
-        <div
-          style={{
-            padding: "6px 14px",
-            fontSize: "11px",
-            background: "var(--red-soft)",
-            color: "var(--red)",
-          }}
-        >
-          {error}
-        </div>
-      )}
-
-      <div className="popup-bar">
-        <label style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer" }}>
-          <input
-            type="checkbox"
-            checked={settings.autoInterceptDownloads}
-            onChange={(e) => void onToggleIntercept(e.target.checked)}
-            style={{ accentColor: "var(--accent)" }}
-          />
-          <span style={{ fontWeight: 600 }}>{t("popup.autoTakeover")}</span>
-        </label>
-
-        <div style={{ display: "flex", gap: "4px" }}>
-          <button
-            type="button"
-            className="btn btn-sm"
-            style={{ height: "24px", padding: "0 7px", fontSize: "10.5px" }}
-            onClick={() => void pauseAllTasks().then(onRefresh)}
-          >
-            {t("overview.pauseAll")}
+      <section className="popup-compose" aria-label={t("popup.newDownload")}>
+        <form className="popup-quick" onSubmit={(e) => { e.preventDefault(); void submit(); }}>
+          <input type="text" disabled={adding} value={urlInput} onChange={(e) => setUrlInput(e.target.value)}
+            aria-label={t("popup.urlPlaceholder")} placeholder={t("popup.urlPlaceholder")}
+            spellCheck={false} autoComplete="off" />
+          <button type="submit" className="btn btn-primary" disabled={loading || adding || !urlInput.trim()}>
+            <PlusIcon />{t(adding ? "popup.adding" : "popup.quickAdd")}
           </button>
-          <button
-            type="button"
-            className="btn btn-sm"
-            style={{ height: "24px", padding: "0 7px", fontSize: "10.5px" }}
-            onClick={() => void resumeAllTasks().then(onRefresh)}
-          >
-            {t("overview.resumeAll")}
+        </form>
+        <div className="popup-compose-options">
+          <label className="popup-intercept">
+            <input type="checkbox" checked={settings.autoInterceptDownloads} disabled={loading}
+              onChange={(e) => void runAction(() => onToggleIntercept(e.target.checked))} />
+            <span>{t("popup.autoTakeover")}</span>
+          </label>
+          <input ref={fileRef} type="file" accept=".torrent,application/x-bittorrent" hidden
+            onChange={(e) => { const f = e.target.files?.[0]; e.currentTarget.value = ""; if (f) void handlePickTorrent(f); }} />
+          <button type="button" className="popup-text-button" disabled={loading}
+            onClick={() => fileRef.current?.click()} title={t("add.pickTorrent")}>
+            {t("popup.importTorrent")}
+          </button>
+        </div>
+      </section>
+
+      {error && <div className="popup-error" role="alert">{error}</div>}
+
+      <div className="popup-list-heading">
+        <h2>{t("popup.downloads")}</h2>
+        <div className="popup-bulk-actions">
+          <button type="button" className="popup-text-button" disabled={!tasks.some(task => isActiveTaskState(task.state))}
+            onClick={() => void runAction(async () => { await pauseAllTasks(); await onRefresh(); })}>
+            <PauseIcon />{t("overview.pauseAll")}
+          </button>
+          <button type="button" className="popup-text-button" disabled={!tasks.some(task => task.state === "paused" || task.state === "failed")}
+            onClick={() => void runAction(async () => { await resumeAllTasks(); await onRefresh(); })}>
+            <PlayIcon />{t("overview.resumeAll")}
           </button>
         </div>
       </div>
-
-      <div className="popup-list">
-        {tasks.length === 0 ? (
-          <div style={{ padding: "54px 20px", textAlign: "center" }} className="muted">
-            {t("popup.empty")}
+      <div className="popup-list" aria-busy={loading}>
+        {loading ? (
+          <div className="popup-loading" role="status">{loadError ? <><p>{t("popup.loadFailed")}</p><button type="button" className="btn btn-sm" onClick={() => void onRefresh()}>{t("popup.retry")}</button></> : t("popup.loading")}</div>
+        ) : tasks.length === 0 ? (
+          <div className="popup-empty">
+            <div className="popup-empty-mark" aria-hidden="true">↓</div>
+            <strong>{t("popup.emptyTitle")}</strong>
+            <p>{t("popup.empty")}</p>
           </div>
-        ) : (
-          tasks.slice(0, 8).map((task) => {
-            const pct = calcProgressPercent(task.downloaded, task.total);
-            const done = task.state === "completed" || task.state === "seeding";
-            const active =
-              task.state === "downloading" ||
-              task.state === "fetching_metadata" ||
-              task.state === "queued";
-            const sp = formatSpeed(task.speedBps);
-
-            return (
-              <div key={task.id} className="popup-task">
-                <div className="popup-task-top">
-                  <span className={`type-tag ${task.kind === "torrent" ? "bt" : "http"}`}>
-                    {task.kind === "torrent" ? "BT" : "HTTP"}
-                  </span>
-                  <span className="popup-task-name" title={task.name}>
-                    {task.name}
-                  </span>
-                  <span className={`state-tag ${task.state}`}>
-                    {t(`task.state.${task.state}`)}
-                  </span>
+        ) : visibleTasks.map((task) => {
+          const pct = calcProgressPercent(task.downloaded, task.total);
+          const done = task.state === "completed" || task.state === "seeding";
+          const active = isActiveTaskState(task.state);
+          return (
+            <article key={task.id} className="popup-task">
+              <div className="popup-task-top">
+                <span className={`type-tag ${task.kind === "torrent" ? "bt" : "http"}`}>{task.kind === "torrent" ? "BT" : "HTTP"}</span>
+                <span className="popup-task-name" title={task.name}>{task.name}</span>
+              </div>
+              <div className="popup-task-progress">
+                <span className={`state-tag ${task.state}`}>{t(`task.state.${task.state}`)}</span>
+                <span>{task.total === null ? "—" : `${pct.toFixed(0)}%`}</span>
+              </div>
+              <SegmentBar task={task} />
+              <div className="popup-task-bottom">
+                <div className="popup-task-details">
+                  <span>{formatBytes(task.downloaded)} / {formatBytes(task.total)}</span>
+                  {active && <span className="popup-task-speed">{formatSpeed(task.speedBps).full}{task.etaSecs !== null && <> · {t("popup.remaining", { time: formatEta(task.etaSecs) })}</>}</span>}
                 </div>
-
-                <SegmentBar task={task} />
-
-                <div className="popup-task-bottom">
-                  <span>
-                    {formatBytes(task.downloaded)} / {formatBytes(task.total)} ({pct.toFixed(0)}%)
-                  </span>
-                  <span>
-                    {active
-                      ? `${sp.full} · ETA ${formatEta(task.etaSecs)}`
-                      : task.error
-                        ? task.error.slice(0, 26)
-                        : ""}
-                  </span>
-                  <div style={{ display: "flex", gap: "4px" }}>
-                    {!done ? (
-                      <button
-                        type="button"
-                        className="icon-btn"
-                        style={{ width: "24px", height: "24px" }}
-                        onClick={async () => {
-                          if (active) await pauseTask(task.id);
-                          else await resumeTask(task.id);
-                          await onRefresh();
-                        }}
-                      >
-                        {active ? <PauseIcon /> : <PlayIcon />}
-                      </button>
-                    ) : (
-                      <>
-                        <button
-                          type="button"
-                          className="icon-btn"
-                          style={{ width: "24px", height: "24px" }}
-                          title={t("task.open")}
-                          onClick={() =>
-                            void openTaskFile(task).catch((err) =>
-                              setError(err instanceof Error ? err.message : String(err)),
-                            )
-                          }
-                        >
-                          <ExternalIcon />
-                        </button>
-                        <button
-                          type="button"
-                          className="icon-btn"
-                          style={{ width: "24px", height: "24px" }}
-                          title={t("task.openFolder")}
-                          onClick={() =>
-                            void revealTaskFile(task).catch((err) =>
-                              setError(err instanceof Error ? err.message : String(err)),
-                            )
-                          }
-                        >
-                          <FolderIcon />
-                        </button>
-                      </>
-                    )}
-                    <button
-                      type="button"
-                      className="icon-btn danger"
-                      style={{ width: "24px", height: "24px" }}
-                      title={t("task.removeTitle")}
-                      onClick={() => {
-                        setDeleteFilesCheck(false);
-                        setRemoveTarget(task);
-                      }}
-                    >
-                      <TrashIcon />
+                <div className="popup-task-actions">
+                  {!done ? (
+                    <button type="button" className="icon-btn" title={t(active ? "task.pause" : "task.resume")}
+                      aria-label={t(active ? "task.pause" : "task.resume")}
+                      onClick={() => void runAction(async () => { if (active) await pauseTask(task.id); else await resumeTask(task.id); await onRefresh(); })}>
+                      {active ? <PauseIcon /> : <PlayIcon />}
                     </button>
-                  </div>
+                  ) : (<>
+                    <button type="button" className="icon-btn" title={t("task.open")} aria-label={t("task.open")}
+                      onClick={() => void runAction(() => openTaskFile(task))}><ExternalIcon /></button>
+                    <button type="button" className="icon-btn" title={t("task.openFolder")} aria-label={t("task.openFolder")}
+                      onClick={() => void runAction(() => revealTaskFile(task))}><FolderIcon /></button>
+                  </>)}
+                  <button type="button" className="icon-btn danger" title={t("task.removeTitle")} aria-label={t("task.removeTitle")}
+                    onClick={() => { setDeleteFilesCheck(false); setRemoveTarget(task); }}><TrashIcon /></button>
                 </div>
               </div>
-            );
-          })
-        )}
+              {task.error && <p className="popup-task-error" title={task.error}>{task.error}</p>}
+            </article>
+          );
+        })}
       </div>
-
       <footer className="popup-foot">
-        <button
-          type="button"
-          className="btn btn-sm"
-          onClick={() => void openDownloadsFolder(settings.standaloneMode)}
-        >
-          <FolderIcon />
-          <span>{t("toolbar.openFolder")}</span>
+        <button type="button" className="btn btn-sm" onClick={() => void runAction(() => openDownloadsFolder(settings.standaloneMode))}>
+          <FolderIcon /><span>{t("toolbar.openFolder")}</span>
         </button>
-        <span className="muted" style={{ fontSize: "11px" }}>
-          {t("popup.taskCount", { count: tasks.length })}
-        </span>
+        <button type="button" className="btn btn-sm popup-manager" onClick={() => void runAction(() => openManagerTab())}>
+          <span>{t("popup.openManager")}</span><ExternalIcon />
+        </button>
       </footer>
 
       {pendingTorrent && (
@@ -666,18 +561,20 @@ function PopupInner({
 function PopupApp() {
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [tasks, setTasks] = useState<TaskView[]>([]);
   const [helperStatus, setHelperStatus] = useState<NativeHelperStatus | null>(null);
   const [checkingHelper, setCheckingHelper] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
+      setLoadError(null);
       const snap = await getStateSnapshot();
       setSettings(snap.settings);
       setSettingsLoaded(true);
       setTasks(snap.tasks);
-    } catch {
-      // ignore
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : String(err));
     }
   }, []);
 
@@ -700,7 +597,7 @@ function PopupApp() {
       const st = await ensureNativeHelper(false);
       setHelperStatus(st);
     } catch {
-      // ignore
+      setHelperStatus({ available: false });
     } finally {
       setCheckingHelper(false);
     }
@@ -755,6 +652,8 @@ function PopupApp() {
         tasks={tasks}
         helperStatus={helperStatus}
         checkingHelper={checkingHelper}
+        loading={!settingsLoaded}
+        loadError={loadError}
         onEnableAgent={handleEnableAgent}
         onRefreshHelper={refreshHelper}
         onRefresh={refresh}

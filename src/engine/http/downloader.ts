@@ -1,16 +1,13 @@
-import {
-  guessFileNameFromUrl,
-  parseContentDisposition,
-  sanitizeFileName,
-} from "../../shared/filename";
+import { guessFileNameFromUrl, parseContentDisposition, sanitizeFileName } from "../../shared/filename";
 import type { SegmentView } from "../../shared/types";
 import type { PartStorageBackend } from "../storage/part-store";
 import type { RateLimiter } from "./rate-limiter";
+import { abortableDelay, openHttpStream } from "./request";
+import { hashBlobSha256 } from "./sha256";
 
-export const MIN_SEGMENT_BYTES = 64 * 1024; // 64 KiB
-export const MIN_STEAL_BYTES = 256 * 1024; // 256 KiB
-const WORKER_WRITE_BUFFER_BYTES = 2 * 1024 * 1024; // 每个连接 2 MiB 聚合写缓冲，避免每个 16 KiB 网络包触发磁盘 IPC
-const PROGRESS_THROTTLE_MS = 120; // 最多每 120ms (~8 FPS) 广播一次 UI 进度，防止高频 IPC 阻塞下载流
+export const MIN_SEGMENT_BYTES = 64 * 1024;
+const WRITE_BUFFER_BYTES = 2 * 1024 * 1024;
+const CHECKPOINT_MS = 1000;
 
 export interface ProbeResult {
   finalUrl: string;
@@ -20,16 +17,16 @@ export interface ProbeResult {
   lastModified: string | null;
   fileName: string | null;
 }
-
 export interface HttpDownloadProgress {
   downloaded: number;
+  committedBytes: number;
   total: number | null;
   speedBps: number;
   etaSecs: number | null;
   rangeSupported: boolean;
   segments: SegmentView[];
+  committedSegments: SegmentView[];
 }
-
 export interface HttpDownloadOptions {
   url: string;
   partKey: string;
@@ -40,6 +37,7 @@ export interface HttpDownloadOptions {
   expectedSha256?: string | null;
   rateLimiter?: RateLimiter;
   signal: AbortSignal;
+  timeoutMs?: number;
   resumeState?: {
     etag: string | null;
     lastModified: string | null;
@@ -49,9 +47,18 @@ export interface HttpDownloadOptions {
   };
   onProbe?: (probe: ProbeResult) => void;
   onProgress?: (progress: HttpDownloadProgress) => void;
+  onPhase?: (phase: "verifying") => void;
   fetchImpl?: typeof fetch;
 }
-
+export interface HttpDownloadMetrics {
+  effectiveConnections: number;
+  requests: number;
+  retries: number;
+  networkBytes: number;
+  probeMs: number;
+  writeMs: number;
+  elapsedMs: number;
+}
 export interface HttpDownloadResult {
   finalUrl: string;
   fileName: string;
@@ -60,578 +67,293 @@ export interface HttpDownloadResult {
   lastModified: string | null;
   rangeSupported: boolean;
   segments: SegmentView[];
+  metrics: HttpDownloadMetrics;
 }
 
-/**
- * 解析 Content-Range: bytes start-end/total
- */
+class ResponseError extends Error {}
+class StorageError extends Error {}
+class TransientError extends Error {}
+
+function contentRange(header: string | null) {
+  const m = header?.match(/^bytes (\d+)-(\d+)\/(\d+)$/i);
+  if (!m) return null;
+  const [start, end, total] = m.slice(1).map(Number);
+  return [start, end, total].every(Number.isSafeInteger) && start <= end && end < total
+    ? { start, end, total } : null;
+}
 export function parseContentRangeTotal(header: string | null | undefined): number | null {
-  if (!header) return null;
-  const match = header.match(/bytes\s+(?:\d+-\d+|\*)\/(\d+|\*)/i);
-  if (!match) return null;
-  if (match[1] === "*") return null;
-  const total = Number(match[1]);
-  return Number.isFinite(total) && total >= 0 ? total : null;
+  const m = header?.match(/^bytes (?:\d+-\d+|\*)\/(\d+)$/i);
+  const n = m ? Number(m[1]) : NaN;
+  return Number.isSafeInteger(n) && n >= 0 ? n : null;
+}
+function contentLength(headers: Headers): number | null {
+  // fetch exposes decoded bytes, while Content-Length describes the encoded body.
+  if (headers.has("content-encoding") && headers.get("content-encoding")?.toLowerCase() !== "identity") return null;
+  const raw = headers.get("content-length");
+  if (raw === null) return null;
+  const n = Number(raw);
+  if (!/^\d+$/.test(raw) || !Number.isSafeInteger(n)) throw new ResponseError("Invalid Content-Length");
+  return n;
+}
+function requestHeaders(headers?: Array<[string, string]>): Headers {
+  const result = new Headers();
+  for (const [key, value] of headers ?? []) {
+    if (key && value) result.set(key, value);
+  }
+  result.delete("Range");
+  result.delete("If-Range");
+  return result;
+}
+function validator(probe: Pick<ProbeResult, "etag" | "lastModified">): string | null {
+  return probe.etag && !probe.etag.startsWith("W/") ? probe.etag : probe.lastModified;
 }
 
-/**
- * 将文件总长度划分为初始的多连接分段区间 [start, end)（半开区间）。
- */
-export function buildInitialSegments(
-  total: number,
-  connections: number,
-  minSegmentBytes = MIN_SEGMENT_BYTES,
-): SegmentView[] {
-  if (total <= 0) {
-    return [];
-  }
-  const clampedConn = Math.max(1, Math.min(32, Math.floor(connections) || 1));
-  const maxBySize = Math.max(1, Math.floor(total / Math.max(1, minSegmentBytes)));
-  const count = Math.min(clampedConn, maxBySize);
-  const baseChunk = Math.floor(total / count);
-  const segments: SegmentView[] = [];
-
-  let offset = 0;
-  for (let i = 0; i < count; i++) {
-    const isLast = i === count - 1;
-    const end = isLast ? total : offset + baseChunk;
-    segments.push({
-      index: i,
-      start: offset,
-      current: offset,
-      end,
-      state: "pending",
-    });
-    offset = end;
-  }
-  return segments;
+/** Small fixed Range jobs balance tails without cutting requests queued in Chromium. */
+export function buildRangeQueue(total: number, connections: number): SegmentView[] {
+  if (total <= 0) return [];
+  const workers = Math.max(1, Math.min(32, Math.floor(connections) || 1));
+  // Keep a whole number of worker waves: 16 x 8 MiB jobs leave four of six
+  // connections idle at the tail; 18 balanced jobs cover the same 128 MiB.
+  const desired = workers * Math.max(1, Math.ceil(total / (8 * 1024 * 1024 * workers)));
+  const count = Math.min(desired, workers * Math.floor(4096 / workers), Math.max(1, Math.floor(total / MIN_SEGMENT_BYTES)));
+  const size = Math.floor(total / count);
+  return Array.from({ length: count }, (_, index) => ({
+    index, start: index * size, current: index * size, end: index === count - 1 ? total : (index + 1) * size, state: "pending",
+  }));
 }
 
-/**
- * 动态分片窃取（Work Stealing）：
- * 当空闲连接找不到 pending 分片时，从剩余字节最多的 downloading 分片对半切出后半段。
- */
-export function stealSegmentWork(
-  segments: SegmentView[],
-  minStealBytes = MIN_STEAL_BYTES,
-): SegmentView | null {
-  let candidate: SegmentView | null = null;
-  let maxRemaining = 0;
-
-  for (const seg of segments) {
-    if (seg.state !== "downloading") continue;
-    const remaining = seg.end - seg.current;
-    if (remaining >= minStealBytes * 2 && remaining > maxRemaining) {
-      maxRemaining = remaining;
-      candidate = seg;
-    }
-  }
-
-  if (!candidate) {
-    return null;
-  }
-
-  const splitPoint = candidate.current + Math.floor((candidate.end - candidate.current) / 2);
-  const oldEnd = candidate.end;
-  candidate.end = splitPoint;
-
-  const stolen: SegmentView = {
-    index: segments.length,
-    start: splitPoint,
-    current: splitPoint,
-    end: oldEnd,
-    state: "pending",
-  };
-  segments.push(stolen);
-  return stolen;
-}
-
-/**
- * 探测 HTTP 资源是否支持 Range 请求、文件总长、ETag 与文件名。
- */
-export async function probeHttpSource(
-  url: string,
-  options: {
-    carryCookies: boolean;
-    headers?: Array<[string, string]>;
-    signal?: AbortSignal;
-    fetchImpl?: typeof fetch;
-  },
-): Promise<ProbeResult> {
-  const fetchFn = options.fetchImpl ?? fetch;
-  const probeAbort = new AbortController();
-  const onParentAbort = () => probeAbort.abort();
-  options.signal?.addEventListener("abort", onParentAbort, { once: true });
-
+export async function probeHttpSource(url: string, options: {
+  carryCookies: boolean; headers?: Array<[string, string]>; signal?: AbortSignal; fetchImpl?: typeof fetch; timeoutMs?: number;
+}): Promise<ProbeResult> {
+  const headers = requestHeaders(options.headers);
+  headers.set("Range", "bytes=0-0");
+  const stream = await openHttpStream(options.fetchImpl ?? fetch, url, {
+    headers, credentials: options.carryCookies ? "include" : "omit", signal: options.signal,
+  }, options.timeoutMs);
   try {
-    const reqHeaders = new Headers();
-    for (const [k, v] of options.headers ?? []) {
-      if (k && v) {
-        try {
-          reqHeaders.set(k, v);
-        } catch {
-          // 忽略浏览器禁止直接在 fetch 设置的受限头（由 background DNR 处理）
-        }
-      }
-    }
-    reqHeaders.set("Range", "bytes=0-0");
-
-    const response = await fetchFn(url, {
-      method: "GET",
-      headers: reqHeaders,
-      credentials: options.carryCookies ? "include" : "omit",
-      signal: probeAbort.signal,
-    });
-
-    if (response.status === 416) {
-      const total = parseContentRangeTotal(response.headers.get("content-range")) ?? 0;
-      const fileName =
-        parseContentDisposition(response.headers.get("content-disposition")) ??
-        guessFileNameFromUrl(response.url || url);
-      return {
-        finalUrl: response.url || url,
-        total,
-        rangeSupported: false,
-        etag: response.headers.get("etag"),
-        lastModified: response.headers.get("last-modified"),
-        fileName,
-      };
-    }
-
-    if (!response.ok && response.status !== 206) {
-      throw new Error(`HTTP ${response.status} ${response.statusText || ""}`.trim());
-    }
-
-    const finalUrl = response.url || url;
-    const etag = response.headers.get("etag");
-    const lastModified = response.headers.get("last-modified");
-    const fileName =
-      parseContentDisposition(response.headers.get("content-disposition")) ??
-      guessFileNameFromUrl(finalUrl);
-
-    if (response.status === 206) {
-      const total = parseContentRangeTotal(response.headers.get("content-range"));
-      await response.body?.cancel().catch(() => {});
-      return {
-        finalUrl,
-        total,
-        rangeSupported: total !== null && total > 0,
-        etag,
-        lastModified,
-        fileName,
-      };
-    }
-
-    // 200 OK：服务器忽略了 Range 头，不支持分段
-    const contentLengthHeader = response.headers.get("content-length");
-    const parsedLen = contentLengthHeader ? Number(contentLengthHeader) : null;
-    const total = parsedLen !== null && Number.isFinite(parsedLen) && parsedLen >= 0 ? parsedLen : null;
-    await response.body?.cancel().catch(() => {});
-
+    const r = stream.response;
+    let total: number | null;
+    if (r.status === 416) {
+      total = parseContentRangeTotal(r.headers.get("content-range"));
+      if (total !== 0) throw new ResponseError("Range probe rejected by server");
+    } else if (r.status === 206) {
+      const range = contentRange(r.headers.get("content-range"));
+      if (!range || range.start !== 0 || range.end !== 0) throw new ResponseError("Invalid Range probe response");
+      total = r.headers.has("content-encoding") && r.headers.get("content-encoding")?.toLowerCase() !== "identity" ? null : range.total;
+    } else if (r.status === 200) total = contentLength(r.headers);
+    else throw new ResponseError(`HTTP ${r.status} ${r.statusText}`.trim());
     return {
-      finalUrl,
-      total,
-      rangeSupported: false,
-      etag,
-      lastModified,
-      fileName,
+      finalUrl: r.url || url, total, rangeSupported: r.status === 206 && total !== null && total > 0,
+      etag: r.headers.get("etag"), lastModified: r.headers.get("last-modified"),
+      fileName: parseContentDisposition(r.headers.get("content-disposition")) ?? guessFileNameFromUrl(r.url || url),
     };
-  } finally {
-    options.signal?.removeEventListener("abort", onParentAbort);
-  }
+  } finally { await stream.close(); }
 }
 
 export async function computeSha256Hex(bytes: Uint8Array): Promise<string> {
-  const buf = bytes.buffer.slice(
-    bytes.byteOffset,
-    bytes.byteOffset + bytes.byteLength,
-  ) as ArrayBuffer;
-  const digest = await crypto.subtle.digest("SHA-256", buf);
-  return Array.from(new Uint8Array(digest))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
+  const digest = await crypto.subtle.digest("SHA-256", bytes as Uint8Array<ArrayBuffer>);
+  return Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, "0")).join("");
 }
 
-/**
- * 执行完整的多连接分段 HTTP/HTTPS 下载，支持断点续传、动态分片窃取、2MiB 写入聚合缓冲与 SHA-256 校验。
- */
+function validResumeSegments(segments: SegmentView[], total: number, fileSize: number): boolean {
+  let end = 0;
+  for (const s of segments) {
+    if (![s.start, s.current, s.end].every(Number.isSafeInteger) || s.start !== end || s.end <= s.start
+      || s.current < s.start || s.current > s.end || (s.current > s.start && s.current > fileSize)) return false;
+    end = s.end;
+  }
+  return end === total;
+}
+
 export async function runHttpDownload(options: HttpDownloadOptions): Promise<HttpDownloadResult> {
+  options.signal.throwIfAborted();
+  const expected = options.expectedSha256?.trim().toLowerCase();
+  if (expected && !/^[a-f0-9]{64}$/.test(expected)) throw new Error("SHA-256 must contain 64 hexadecimal characters");
+  const startTime = performance.now();
   const fetchFn = options.fetchImpl ?? fetch;
-  const probe = await probeHttpSource(options.url, {
-    carryCookies: options.carryCookies,
-    headers: options.headers,
-    signal: options.signal,
-    fetchImpl: fetchFn,
-  });
-
-  options.onProbe?.(probe);
-
-  const targetUrl = probe.finalUrl || options.url;
-  const resolvedName = sanitizeFileName(
-    probe.fileName || guessFileNameFromUrl(targetUrl),
-    "download",
-  );
-
-  // 检查是否可以安全复用上次暂停的续传分片
+  const probe = await probeHttpSource(options.url, { ...options, fetchImpl: fetchFn });
+  const protocol = typeof performance.getEntriesByName === "function"
+    ? (performance.getEntriesByName(probe.finalUrl).at(-1) as PerformanceResourceTiming | undefined)?.nextHopProtocol : "";
+  const requested = Math.max(1, Math.min(32, Math.floor(options.connections) || 1));
+  const connections = new URL(probe.finalUrl).protocol === "http:" || protocol === "http/1.1"
+    ? Math.min(6, requested) : requested;
+  const metrics: HttpDownloadMetrics = { effectiveConnections: connections, requests: 1, retries: 0,
+    networkBytes: 0, probeMs: performance.now() - startTime, writeMs: 0, elapsedMs: 0 };
+  let total = probe.total;
   let segments: SegmentView[] = [];
-  let canResume = false;
-  if (
-    options.resumeState &&
-    probe.rangeSupported &&
-    probe.total !== null &&
-    options.resumeState.total === probe.total &&
-    options.resumeState.segments.length > 0 &&
-    (await options.partStore.exists(options.partKey))
-  ) {
-    const etagMatch =
-      !options.resumeState.etag || !probe.etag || options.resumeState.etag === probe.etag;
-    const lmMatch =
-      !options.resumeState.lastModified ||
-      !probe.lastModified ||
-      options.resumeState.lastModified === probe.lastModified;
-
-    if (etagMatch && lmMatch) {
-      canResume = true;
-      segments = options.resumeState.segments.map((s) => ({
-        ...s,
-        state: s.current >= s.end ? "completed" : "pending",
-      }));
-    }
-  }
-
-  if (!canResume) {
-    if (probe.rangeSupported && probe.total !== null && probe.total > 0) {
-      await options.partStore.allocate(options.partKey, probe.total);
-      segments = buildInitialSegments(probe.total, options.connections);
-    } else {
-      await options.partStore.allocate(options.partKey, probe.total ?? 0);
-      segments = [
-        {
-          index: 0,
-          start: 0,
-          current: 0,
-          end: probe.total ?? 0,
-          state: "pending",
-        },
-      ];
-    }
-  }
-
-  let totalBytes = probe.total;
-  let downloadedBytes = segments.reduce((sum, s) => sum + Math.max(0, s.current - s.start), 0);
-  let lastSpeedSampleTime = Date.now();
-  let lastSpeedSampleBytes = downloadedBytes;
-  let lastEmitTime = 0;
-  let smoothSpeedBps = 0;
-
-  const emitProgress = (force = false) => {
-    if (!options.onProgress) return;
-    const now = Date.now();
-    if (!force && now - lastEmitTime < PROGRESS_THROTTLE_MS) {
-      return;
-    }
-    lastEmitTime = now;
-
-    const dt = (now - lastSpeedSampleTime) / 1000;
-    if (dt >= 0.12) {
-      const instSpeed = Math.max(0, (downloadedBytes - lastSpeedSampleBytes) / dt);
-      smoothSpeedBps =
-        smoothSpeedBps === 0 ? instSpeed : Math.round(smoothSpeedBps * 0.55 + instSpeed * 0.45);
-      lastSpeedSampleTime = now;
-      lastSpeedSampleBytes = downloadedBytes;
-    }
-    const remaining =
-      totalBytes !== null && totalBytes > downloadedBytes ? totalBytes - downloadedBytes : null;
-    const etaSecs =
-      remaining !== null && smoothSpeedBps > 0 ? Math.ceil(remaining / smoothSpeedBps) : null;
-
-    options.onProgress({
-      downloaded: downloadedBytes,
-      total: totalBytes,
-      speedBps: Math.round(smoothSpeedBps),
-      etaSecs,
-      rangeSupported: probe.rangeSupported,
-      segments: segments.map((s) => ({ ...s })),
-    });
-  };
-
-  if (!probe.rangeSupported || totalBytes === null || totalBytes === 0) {
-    // 单连接流式下载（处理不支持 Range 或长度未知的响应）
-    if (totalBytes === 0) {
-      emitProgress(true);
-      return {
-        finalUrl: targetUrl,
-        fileName: resolvedName,
-        total: 0,
-        etag: probe.etag,
-        lastModified: probe.lastModified,
-        rangeSupported: false,
-        segments,
-      };
-    }
-
-    const reqHeaders = new Headers();
-    for (const [k, v] of options.headers ?? []) {
-      if (k && v) {
-        try {
-          reqHeaders.set(k, v);
-        } catch {
-          // 忽略受限头
-        }
-      }
-    }
-
-    const response = await fetchFn(targetUrl, {
-      method: "GET",
-      headers: reqHeaders,
-      credentials: options.carryCookies ? "include" : "omit",
-      signal: options.signal,
-    });
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status} ${response.statusText || ""}`.trim());
-    }
-
-    segments[0].state = "downloading";
-    let offset = 0;
-    const writeBuf = new Uint8Array(WORKER_WRITE_BUFFER_BYTES);
-    let writeBufStart = 0;
-    let writeBufLen = 0;
-
-    const flushSingleBuffer = async () => {
-      if (writeBufLen <= 0) return;
-      const slice = writeBuf.subarray(0, writeBufLen);
-      const startOff = writeBufStart;
-      writeBufStart += writeBufLen;
-      writeBufLen = 0;
-      await options.partStore.writeAt(options.partKey, startOff, slice);
-    };
-
-    const reader = response.body?.getReader();
-    try {
-      if (reader) {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          if (value && value.byteLength > 0) {
-            await options.rateLimiter?.acquire(value.byteLength, options.signal);
-            offset += value.byteLength;
-            downloadedBytes = offset;
-            segments[0].current = offset;
-            if (totalBytes === null || offset > totalBytes) {
-              segments[0].end = offset;
-            }
-
-            if (value.byteLength >= WORKER_WRITE_BUFFER_BYTES) {
-              await flushSingleBuffer();
-              await options.partStore.writeAt(
-                options.partKey,
-                offset - value.byteLength,
-                value,
-              );
-              writeBufStart = offset;
-            } else {
-              if (writeBufLen + value.byteLength > WORKER_WRITE_BUFFER_BYTES) {
-                await flushSingleBuffer();
-              }
-              if (writeBufLen === 0) {
-                writeBufStart = offset - value.byteLength;
-              }
-              writeBuf.set(value, writeBufLen);
-              writeBufLen += value.byteLength;
-            }
-
-            emitProgress(false);
-          }
-        }
-      }
-    } finally {
-      await flushSingleBuffer();
-    }
-
-    totalBytes = offset;
-    segments[0].end = offset;
-    segments[0].state = "completed";
-    emitProgress(true);
+  const resume = options.resumeState;
+  if (resume && probe.rangeSupported && total !== null && resume.total === total
+    && validator(resume) !== null && validator(resume) === validator(probe)
+    && await options.partStore.exists(options.partKey)
+    && validResumeSegments(resume.segments, total, await options.partStore.size(options.partKey))) {
+    segments = resume.segments.map((s, index) => ({ ...s, index, state: s.current === s.end ? "completed" : "pending" }));
   } else {
-    // 多连接分段下载 + 动态分片窃取 (Work Stealing) + 2 MiB 块聚合落盘
-    const claimNextSegment = (): SegmentView | null => {
-      const pending = segments.find((s) => s.state === "pending" && s.current < s.end);
-      if (pending) {
-        pending.state = "downloading";
-        return pending;
-      }
-      const stolen = stealSegmentWork(segments, MIN_STEAL_BYTES);
-      if (stolen) {
-        stolen.state = "downloading";
-        return stolen;
-      }
-      return null;
-    };
-
-    const downloadSingleSegment = async (seg: SegmentView): Promise<void> => {
-      let attempt = 0;
-      const maxAttempts = 5;
-      const writeBuf = new Uint8Array(WORKER_WRITE_BUFFER_BYTES);
-
-      while (seg.current < seg.end) {
-        if (options.signal.aborted) {
-          throw new DOMException("Aborted", "AbortError");
-        }
-
-        let writeBufStart = seg.current;
-        let writeBufLen = 0;
-
-        const flushSegmentBuffer = async () => {
-          if (writeBufLen <= 0) return;
-          const slice = writeBuf.subarray(0, writeBufLen);
-          const startOff = writeBufStart;
-          writeBufStart += writeBufLen;
-          writeBufLen = 0;
-          await options.partStore.writeAt(options.partKey, startOff, slice);
-        };
-
-        try {
-          const reqHeaders = new Headers();
-          for (const [k, v] of options.headers ?? []) {
-            if (k && v) {
-              try {
-                reqHeaders.set(k, v);
-              } catch {
-                // 忽略受限头
-              }
-            }
-          }
-          // 注意：seg.end 在 Work Stealing 时可能被其他 worker 动态缩小
-          reqHeaders.set("Range", `bytes=${seg.current}-${seg.end - 1}`);
-
-          const response = await fetchFn(targetUrl, {
-            method: "GET",
-            headers: reqHeaders,
-            credentials: options.carryCookies ? "include" : "omit",
-            signal: options.signal,
-          });
-
-          if (response.status !== 206 && response.status !== 200) {
-            throw new Error(`分片请求失败: HTTP ${response.status}`);
-          }
-
-          const reader = response.body?.getReader();
-          if (!reader) {
-            throw new Error("响应体为空");
-          }
-
-          while (seg.current < seg.end) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            if (!value || value.byteLength === 0) continue;
-
-            // 如果该分片在下载过程中被其他空闲连接窃取了后半部分，只写到最新 seg.end 为止
-            const remainingAllowed = seg.end - seg.current;
-            if (remainingAllowed <= 0) {
-              await reader.cancel().catch(() => {});
-              break;
-            }
-
-            const sliceToWrite =
-              value.byteLength > remainingAllowed ? value.subarray(0, remainingAllowed) : value;
-
-            await options.rateLimiter?.acquire(sliceToWrite.byteLength, options.signal);
-
-            const chunkOffset = seg.current;
-            seg.current += sliceToWrite.byteLength;
-            downloadedBytes += sliceToWrite.byteLength;
-
-            if (sliceToWrite.byteLength >= WORKER_WRITE_BUFFER_BYTES) {
-              await flushSegmentBuffer();
-              await options.partStore.writeAt(options.partKey, chunkOffset, sliceToWrite);
-              writeBufStart = seg.current;
-            } else {
-              if (writeBufLen + sliceToWrite.byteLength > WORKER_WRITE_BUFFER_BYTES) {
-                await flushSegmentBuffer();
-              }
-              if (writeBufLen === 0) {
-                writeBufStart = chunkOffset;
-              }
-              writeBuf.set(sliceToWrite, writeBufLen);
-              writeBufLen += sliceToWrite.byteLength;
-            }
-
-            emitProgress(false);
-
-            if (seg.current >= seg.end) {
-              await reader.cancel().catch(() => {});
-              break;
-            }
-          }
-
-          await flushSegmentBuffer();
-
-          if (seg.current >= seg.end) {
-            seg.state = "completed";
-            emitProgress(true);
-            return;
-          }
-          throw new Error("分片连接提前关闭");
-        } catch (err) {
-          await flushSegmentBuffer().catch(() => {});
-          if (options.signal.aborted || (err instanceof DOMException && err.name === "AbortError")) {
-            seg.state = "pending";
-            throw err;
-          }
-          attempt += 1;
-          if (attempt >= maxAttempts) {
-            seg.state = "pending";
-            throw err;
-          }
-          const backoffMs = Math.min(8000, 300 * 2 ** (attempt - 1));
-          await new Promise<void>((resolve, reject) => {
-            const t = setTimeout(resolve, backoffMs);
-            options.signal.addEventListener(
-              "abort",
-              () => {
-                clearTimeout(t);
-                reject(new DOMException("Aborted", "AbortError"));
-              },
-              { once: true },
-            );
-          });
-        }
-      }
-      seg.state = "completed";
-    };
-
-    const workerCount = Math.max(1, Math.min(32, options.connections));
-    const workers = Array.from({ length: workerCount }, async () => {
-      while (!options.signal.aborted) {
-        const seg = claimNextSegment();
-        if (!seg) break;
-        await downloadSingleSegment(seg);
-      }
-    });
-
-    await Promise.all(workers);
-    emitProgress(true);
+    await options.partStore.allocate(options.partKey, total ?? 0, "reset");
+    segments = probe.rangeSupported && total ? buildRangeQueue(total, connections)
+      : [{ index: 0, start: 0, current: 0, end: total ?? 0, state: "pending" }];
   }
-
-  await options.partStore.flush?.(options.partKey);
-
-  // 可选 SHA-256 完整性校验
-  if (options.expectedSha256 && options.expectedSha256.trim()) {
-    const expected = options.expectedSha256.trim().toLowerCase();
-    const bytes = await options.partStore.readAll(options.partKey);
-    const actual = await computeSha256Hex(bytes);
-    if (actual !== expected) {
-      throw new Error(`SHA-256 校验不匹配（期望 ${expected.slice(0, 12)}…，实际 ${actual.slice(0, 12)}…）`);
+  options.onProbe?.(probe);
+  const committed = segments.map(s => s.current);
+  const received = segments.map(s => s.current);
+  let lastEmit = 0, lastSample = performance.now();
+  let sampleBytes = segments.reduce((sum, s) => sum + s.current - s.start, 0), speed = 0;
+  const emit = (force = false) => {
+    if (!options.onProgress) return;
+    const now = performance.now();
+    if (!force && now - lastEmit < 120) return;
+    lastEmit = now;
+    const downloaded = segments.reduce((sum, s, i) => sum + received[i] - s.start, 0);
+    if (now - lastSample >= 120) {
+      const instant = Math.max(0, (downloaded - sampleBytes) * 1000 / (now - lastSample));
+      speed = speed ? Math.round(speed * 0.55 + instant * 0.45) : instant;
+      lastSample = now; sampleBytes = downloaded;
     }
-  }
-
-  return {
-    finalUrl: targetUrl,
-    fileName: resolvedName,
-    total: totalBytes ?? downloadedBytes,
-    etag: probe.etag,
-    lastModified: probe.lastModified,
-    rangeSupported: probe.rangeSupported,
-    segments,
+    options.onProgress({ downloaded, total, speedBps: Math.round(speed),
+      etaSecs: total !== null && speed > 0 ? Math.ceil(Math.max(0, total - downloaded) / speed) : null,
+      rangeSupported: probe.rangeSupported,
+      segments: segments.map((s, i) => ({ ...s, current: received[i] })),
+      committedBytes: segments.reduce((sum, s, i) => sum + committed[i] - s.start, 0),
+      committedSegments: segments.map((s, i) => ({ ...s, current: committed[i], state: committed[i] === s.end ? "completed" : "pending" })),
+    });
   };
+  const group = new AbortController();
+  const onAbort = () => group.abort(options.signal.reason);
+  options.signal.addEventListener("abort", onAbort, { once: true });
+  if (options.signal.aborted) onAbort();
+  let cursor = 0, failure: unknown;
+  const downloadSegment = async (seg: SegmentView, buffer: Uint8Array): Promise<void> => {
+    const index = seg.index;
+    let buffered = 0, position = seg.current, written = position, lastCommit = performance.now();
+    const writeBuffer = async () => {
+      if (!buffered) return;
+      const started = performance.now();
+      try { await options.partStore.writeAt(options.partKey, written, buffer.subarray(0, buffered)); }
+      catch (err) { throw new StorageError("写入下载数据失败", { cause: err }); }
+      finally { metrics.writeMs += performance.now() - started; }
+      written += buffered;
+      buffered = 0;
+    };
+    const checkpoint = async () => {
+      await writeBuffer();
+      try {
+        if (options.partStore.sync) await options.partStore.sync(options.partKey);
+        else await options.partStore.flush?.(options.partKey);
+      } catch (err) { throw new StorageError("提交下载数据失败", { cause: err }); }
+      committed[index] = written;
+      seg.current = written;
+      lastCommit = performance.now();
+      emit(true);
+    };
+    for (let attempt = 0; ; attempt++) {
+      group.signal.throwIfAborted();
+      let stream: Awaited<ReturnType<typeof openHttpStream>> | undefined;
+      try {
+        const headers = requestHeaders(options.headers);
+        const ranged = probe.rangeSupported;
+        const requestStart = position;
+        if (ranged) {
+          headers.set("Range", `bytes=${position}-${seg.end - 1}`);
+          const tag = validator(probe);
+          if (tag) headers.set("If-Range", tag);
+        }
+        metrics.requests++;
+        stream = await openHttpStream(fetchFn, probe.finalUrl, {
+          headers, credentials: options.carryCookies ? "include" : "omit", signal: group.signal,
+        }, options.timeoutMs);
+        const r = stream.response;
+        if (r.status === 408 || r.status === 429 || r.status >= 500) throw new TransientError(`HTTP ${r.status}`);
+        if (ranged) {
+          const range = contentRange(r.headers.get("content-range"));
+          if (r.status !== 206 || !range || range.start !== requestStart || range.end !== seg.end - 1 || range.total !== total)
+            throw new ResponseError("服务器返回的分片范围已变化，请重新下载");
+          const length = contentLength(r.headers);
+          if (length !== null && length !== seg.end - requestStart) throw new ResponseError("分片长度不匹配");
+        } else {
+          if (r.status !== 200) throw new ResponseError(`HTTP ${r.status}`);
+          const length = contentLength(r.headers);
+          if (total !== null && length !== null && length !== total) throw new ResponseError("服务器文件长度已变化，请重新下载");
+          if (total === null && length !== null) { total = length; seg.end = length; }
+        }
+        if (probe.etag && r.headers.has("etag") && r.headers.get("etag") !== probe.etag)
+          throw new ResponseError("服务器文件版本已变化，请重新下载");
+        seg.state = "downloading";
+        while (true) {
+          const { value, done } = await stream.read();
+          if (done) break;
+          group.signal.throwIfAborted();
+          if (!value?.byteLength) continue;
+          metrics.networkBytes += value.byteLength;
+          if (total !== null && position + value.byteLength > seg.end) throw new ResponseError("响应超出请求范围");
+          await options.rateLimiter?.acquire(value.byteLength, group.signal);
+          for (let at = 0; at < value.length;) {
+            const count = Math.min(buffer.length - buffered, value.length - at);
+            buffer.set(value.subarray(at, at + count), buffered);
+            at += count; buffered += count; position += count;
+            received[index] = position;
+            if (buffered === buffer.length) await writeBuffer();
+          }
+          if (total === null) seg.end = position;
+          if (performance.now() - lastCommit >= CHECKPOINT_MS) await checkpoint();
+          emit();
+        }
+        if (total !== null && position !== seg.end) throw new TransientError("分片连接提前关闭");
+        await checkpoint();
+        seg.state = "completed";
+        if (!probe.rangeSupported && total === null) total = position;
+        return;
+      } catch (err) {
+        // Flush valid buffered bytes on cancellation/network failures, never discard
+        // them after advancing a resume offset. Storage failures cannot be retried.
+        if (!(err instanceof StorageError)) await checkpoint();
+        if (group.signal.aborted || err instanceof StorageError || err instanceof ResponseError
+          || !probe.rangeSupported || attempt >= 4
+          || !(err instanceof TypeError || err instanceof TransientError || (err instanceof DOMException && err.name === "TimeoutError"))) throw err;
+        metrics.retries++;
+        await stream?.close(); stream = undefined;
+        await abortableDelay(Math.min(8000, 300 * 2 ** attempt), group.signal);
+      } finally { await stream?.close(); }
+    }
+  };
+  emit(true);
+  try {
+    if (total !== 0) {
+      const workers = Array.from({ length: probe.rangeSupported ? connections : 1 }, async () => {
+        const buffer = new Uint8Array(WRITE_BUFFER_BYTES);
+        try {
+          while (!group.signal.aborted) {
+            const seg = segments[cursor++];
+            if (!seg) break;
+            if (seg.current < seg.end || !probe.rangeSupported) await downloadSegment(seg, buffer);
+          }
+        } catch (err) { if (failure === undefined) failure = err; group.abort(err); }
+      });
+      await Promise.all(workers);
+      if (failure !== undefined) throw failure;
+      group.signal.throwIfAborted();
+    } else segments[0].state = "completed";
+    await options.partStore.flush?.(options.partKey);
+    if (await options.partStore.size(options.partKey) !== total) throw new StorageError("最终文件长度不匹配");
+    if (expected) {
+      options.onPhase?.("verifying");
+      const actual = await hashBlobSha256(await options.partStore.toBlob(options.partKey), options.signal);
+      if (actual !== expected) {
+        for (const s of segments) {
+          s.current = received[s.index] = committed[s.index] = s.start;
+          s.state = "pending";
+        }
+        throw new Error(`SHA-256 校验不匹配（期望 ${expected.slice(0, 12)}…，实际 ${actual.slice(0, 12)}…）`);
+      }
+    }
+    emit(true);
+    metrics.elapsedMs = performance.now() - startTime;
+    return { finalUrl: probe.finalUrl, fileName: sanitizeFileName(probe.fileName || guessFileNameFromUrl(probe.finalUrl)),
+      total: total ?? 0, etag: probe.etag, lastModified: probe.lastModified,
+      rangeSupported: probe.rangeSupported, segments, metrics };
+  } finally {
+    options.signal.removeEventListener("abort", onAbort);
+    group.abort();
+    // All workers have settled, so no writes can race with pause/delete/new runs.
+    await options.partStore.flush?.(options.partKey);
+    emit(true);
+  }
 }

@@ -166,8 +166,8 @@ export function ensureNativeHelper(allowProtocolFallback = false): Promise<Nativ
   });
 }
 
-export function activateNativeHelperProtocol(): Promise<NativeHelperStatus> {
-  return sendExtensionCommand<NativeHelperStatus>("activate_native_helper_protocol");
+export function activateNativeHelperProtocol(protocolTabId?: number): Promise<NativeHelperStatus> {
+  return sendExtensionCommand<NativeHelperStatus>("activate_native_helper_protocol", { protocolTabId });
 }
 
 export function installNativeAgent(): Promise<AgentInstallState> {

@@ -103,6 +103,7 @@ describe("TaskManager & BitTorrent/Magnet WebSeed Hybrid Engine", () => {
       },
     });
 
+    await manager.updateSettings({ standaloneMode: true, btWebRtcEnabled: false, btCustomTrackers: [] });
     // 只选择第二个文件 (beta.txt, index = 1)
     const view = await manager.addTask({
       url: "",
@@ -140,6 +141,7 @@ describe("TaskManager & BitTorrent/Magnet WebSeed Hybrid Engine", () => {
       },
     });
 
+    await manager.updateSettings({ standaloneMode: true, btWebRtcEnabled: false, btCustomTrackers: [] });
     const magnetUri = `magnet:?xt=urn:btih:${infoHashHex}&dn=tug-bundle&xs=${encodeURIComponent(`${baseUrl}/sample.torrent`)}&ws=${encodeURIComponent(`${baseUrl}/webseed/`)}`;
     const view = await manager.addTask({ url: magnetUri });
 
@@ -171,7 +173,7 @@ describe("TaskManager & BitTorrent/Magnet WebSeed Hybrid Engine", () => {
       },
     });
 
-    await manager.updateSettings({ standaloneMode: true });
+    await manager.updateSettings({ standaloneMode: true, btWebRtcEnabled: false, btCustomTrackers: [] });
     const view = await manager.addTask({
       url: "",
       onlyFiles: [0],
@@ -251,6 +253,7 @@ describe("TaskManager & BitTorrent/Magnet WebSeed Hybrid Engine", () => {
       },
     });
 
+    await manager.updateSettings({ standaloneMode: true, btWebRtcEnabled: false, btCustomTrackers: [] });
     const view = await manager.addTask({
       url: "",
       onlyFiles: [0],

@@ -2,12 +2,19 @@ export type TaskState =
   | "queued"
   | "fetching_metadata"
   | "downloading"
+  | "verifying"
+  | "exporting"
   | "paused"
   | "seeding"
   | "completed"
   | "failed";
 
 export type TaskKind = "http" | "torrent";
+
+export function isActiveTaskState(state: TaskState): boolean {
+  return state === "queued" || state === "fetching_metadata" || state === "downloading"
+    || state === "verifying" || state === "exporting";
+}
 
 export interface SegmentView {
   index: number;
@@ -239,10 +246,7 @@ export function normalizeSettings(input: Partial<Settings>): Settings {
         .filter(Boolean),
     ),
   );
-  const rawTrackers =
-    input.btCustomTrackers && input.btCustomTrackers.length > 0
-      ? [...input.btCustomTrackers, ...DEFAULT_SETTINGS.btCustomTrackers]
-      : DEFAULT_SETTINGS.btCustomTrackers;
+  const rawTrackers = input.btCustomTrackers ?? DEFAULT_SETTINGS.btCustomTrackers;
   merged.btCustomTrackers = Array.from(
     new Set(
       rawTrackers

@@ -1,11 +1,10 @@
-/**
- * 令牌桶限速器（支持动态修改速率，用于全局或单任务下载限速）。
- */
+/** Shared token bucket. Large chunks retain their full debt; changes wake sleepers. */
 export class RateLimiter {
   private rateBps: number | null;
   private availableTokens = 0;
-  private lastRefillMs = Date.now();
+  private lastRefillMs = performance.now();
   private chain: Promise<void> = Promise.resolve();
+  private readonly sleepers = new Set<() => void>();
 
   constructor(rateBps: number | null = null) {
     this.rateBps = rateBps && rateBps > 0 ? rateBps : null;
@@ -14,53 +13,51 @@ export class RateLimiter {
   setRateBps(rateBps: number | null): void {
     this.rateBps = rateBps && rateBps > 0 ? rateBps : null;
     this.availableTokens = 0;
-    this.lastRefillMs = Date.now();
+    this.lastRefillMs = performance.now();
+    for (const wake of this.sleepers) wake();
   }
 
-  getRateBps(): number | null {
-    return this.rateBps;
-  }
+  getRateBps(): number | null { return this.rateBps; }
 
   async acquire(bytes: number, signal?: AbortSignal): Promise<void> {
-    if (!this.rateBps || bytes <= 0) {
-      return;
-    }
-    const next = this.chain.catch(() => {}).then(async () => {
-      if (signal?.aborted) {
-        throw new DOMException("Aborted", "AbortError");
-      }
-      const rate = this.rateBps;
-      if (!rate || rate <= 0) return;
-
-      const now = Date.now();
-      const elapsedSec = Math.max(0, (now - this.lastRefillMs) / 1000);
-      this.lastRefillMs = now;
-      this.availableTokens = Math.min(rate, this.availableTokens + elapsedSec * rate);
-
-      if (this.availableTokens >= bytes) {
-        this.availableTokens -= bytes;
-        return;
-      }
-
-      const deficit = bytes - this.availableTokens;
-      this.availableTokens = 0;
-      const waitMs = Math.min(2000, Math.ceil((deficit / rate) * 1000));
-      if (waitMs > 5) {
-        await new Promise<void>((resolve, reject) => {
-          const timer = setTimeout(() => {
-            signal?.removeEventListener("abort", onAbort);
-            resolve();
-          }, waitMs);
-          const onAbort = () => {
+    signal?.throwIfAborted();
+    if (!this.rateBps || bytes <= 0) return;
+    const next = this.chain.then(async () => {
+      let remaining = bytes;
+      while (remaining > 0) {
+        signal?.throwIfAborted();
+        const rate = this.rateBps;
+        if (!rate) return;
+        const now = performance.now();
+        this.availableTokens = Math.min(rate, this.availableTokens + (now - this.lastRefillMs) * rate / 1000);
+        this.lastRefillMs = now;
+        const take = Math.min(remaining, this.availableTokens);
+        remaining -= take;
+        this.availableTokens -= take;
+        if (remaining <= 0) return;
+        await new Promise<void>(resolve => {
+          const finish = () => {
             clearTimeout(timer);
-            reject(new DOMException("Aborted", "AbortError"));
+            signal?.removeEventListener("abort", finish);
+            this.sleepers.delete(finish);
+            resolve();
           };
-          signal?.addEventListener("abort", onAbort, { once: true });
+          const timer = setTimeout(finish, Math.min(250, Math.ceil(remaining * 1000 / rate)));
+          this.sleepers.add(finish);
+          signal?.addEventListener("abort", finish, { once: true });
         });
-        this.lastRefillMs = Date.now();
       }
     });
-    this.chain = next;
-    return next;
+    this.chain = next.catch(() => {});
+    if (!signal) return next;
+    // A canceled task must not wait behind another task's rate-limited chunk.
+    let onAbort: () => void = () => {};
+    const aborted = new Promise<never>((_, reject) => {
+      onAbort = () => reject(signal.reason);
+      signal.addEventListener("abort", onAbort, { once: true });
+      if (signal.aborted) onAbort();
+    });
+    try { await Promise.race([next, aborted]); }
+    finally { signal.removeEventListener("abort", onAbort); }
   }
 }

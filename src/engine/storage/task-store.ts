@@ -17,6 +17,9 @@ export interface TaskRecord {
   finalUrl: string | null;
   saveDir: string;
   fileName: string | null;
+  fileNameExplicit?: boolean;
+  httpCheckpointVersion?: number;
+  httpDownloadComplete?: boolean;
   state: TaskState;
   total: number | null;
   downloaded: number;
@@ -44,11 +47,15 @@ export interface TaskRecord {
   btPieceCount: number;
   btTrackers: string[];
   btWebSeeds: string[];
+  btDownloadComplete?: boolean;
+  btCheckpointVersion?: number;
+  btExports?: Record<number, { downloadId: number | null; savedPath?: string | null }>;
 }
 
 export function recordToView(
   record: TaskRecord,
   live?: {
+    downloaded?: number;
     speedBps?: number;
     uploadSpeedBps?: number;
     peers?: number;
@@ -67,7 +74,7 @@ export function recordToView(
     url: record.url,
     state: record.state,
     total: record.total,
-    downloaded: record.downloaded,
+    downloaded: live?.downloaded ?? record.downloaded,
     uploaded: record.uploaded,
     speedBps: live?.speedBps ?? 0,
     uploadSpeedBps: live?.uploadSpeedBps ?? 0,
@@ -111,7 +118,7 @@ export class MemoryTaskStore implements TaskStoreBackend {
   }
 
   async list(): Promise<TaskRecord[]> {
-    return Array.from(this.records.values()).sort(
+    return Array.from(this.records.values(), record => structuredClone(record)).sort(
       (a, b) => b.createdAt - a.createdAt || b.id - a.id,
     );
   }

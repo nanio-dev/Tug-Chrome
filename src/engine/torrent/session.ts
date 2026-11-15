@@ -9,6 +9,7 @@ import type { PartStorageBackend } from "../storage/part-store";
 import { bytesToUtf8, decodeBencode, encodeBencode, utf8ToBytes, type BencodeValue } from "./bencode";
 import {
   checkHelperHealth,
+  helperRequestHeaders,
   getHelperSessionPeers,
   startHelperTorrentSession,
   stopHelperTorrentSession,
@@ -29,6 +30,7 @@ const BT_BLOCK_LENGTH = 16384; // 16 KiB 标准 BitTorrent Wire Block 大小
 const MAX_INFLIGHT_BLOCKS_PER_PEER = 64; // 每个 WebRTC 节点允许最多 64 个并发块 (1 MiB 窗口)，消除跨洋高 RTT 吞吐瓶颈
 const WEBSEED_BATCH_TARGET_BYTES = 4 * 1024 * 1024; // WebSeed 每次聚合拉取连续 4 MiB 分片流，消除逐个 64KiB Piece 请求的 RTT 开销
 const PROGRESS_THROTTLE_MS = 120;
+class TorrentStorageError extends Error {}
 
 const PUBLIC_ICE_SERVERS: RTCIceServer[] = [
   { urls: "stun:stun.l.google.com:19302" },
@@ -42,6 +44,7 @@ export interface TorrentProgressUpdate {
   infoHash: string;
   state: "fetching_metadata" | "downloading";
   downloaded: number;
+  committedBytes: number;
   total: number | null;
   speedBps: number;
   peers: number;
@@ -1077,6 +1080,19 @@ class BrowserWebTorrentSwarm {
 export async function runTorrentDownload(
   options: TorrentDownloadOptions,
 ): Promise<TorrentDownloadResult> {
+  options.signal.throwIfAborted();
+  const group = new AbortController();
+  const onAbort = () => group.abort(options.signal.reason);
+  options.signal.addEventListener("abort", onAbort, { once: true });
+  try {
+    return await runTorrentSession({ ...options, signal: group.signal }, group);
+  } finally {
+    group.abort();
+    options.signal.removeEventListener("abort", onAbort);
+  }
+}
+
+async function runTorrentSession(options: TorrentDownloadOptions, group: AbortController): Promise<TorrentDownloadResult> {
   const fetchFn = options.fetchImpl ?? fetch;
   const canUseNativeHelper =
     options.useNativeHelper !== false && Boolean(options.onEnsureNativeHelper);
@@ -1190,6 +1206,7 @@ export async function runTorrentDownload(
   }
 
   const discoveredTrackerPeers: TorrentPeerInfo[] = [];
+  let checkpointOnExit: (() => Promise<void>) | undefined;
 
   try {
     // 2. 构建文件选择状态
@@ -1207,32 +1224,60 @@ export async function runTorrentDownload(
 
     options.onMetadata?.(meta, fileInfos, resolvedTorrentBase64);
 
-    // 为选中的每个文件在 PartStorage 中初始化句柄
+    const invalidPieces = new Set<number>();
+    const selectedKeys: string[] = [];
+    // Missing/newly selected files invalidate every piece touching their absent data.
     for (const file of meta.files) {
       if (selectedSet.has(file.index)) {
         const fileKey = `${options.partKeyPrefix}-file-${file.index}`;
-        await options.partStore.allocate(fileKey, file.length);
+        selectedKeys.push(fileKey);
+        const exists = await options.partStore.exists(fileKey);
+        const size = exists ? await options.partStore.size(fileKey) : 0;
+        const reset = !exists || size > file.length;
+        if (reset || size < file.length) {
+          const missingStart = file.offset + (reset ? 0 : size);
+          for (let p = Math.floor(missingStart / meta.pieceLength); p <= Math.floor((file.offset + file.length - 1) / meta.pieceLength); p++) invalidPieces.add(p);
+        }
+        await options.partStore.allocate(fileKey, file.length, reset ? "reset" : "preserve");
       }
     }
 
     const requiredPieces = computeRequiredPiecesForFiles(meta, selectedSet);
+    const requiredSet = new Set(requiredPieces);
     const completedSet = new Set<number>(
-      (options.completedPieces ?? []).filter((p) => requiredPieces.includes(p)),
+      (options.completedPieces ?? []).filter((p) => requiredSet.has(p) && !invalidPieces.has(p)),
     );
+    const committedSet = new Set(completedSet);
+    let lastCheckpoint = Date.now();
+    let checkpointChain: Promise<void> = Promise.resolve();
+    const checkpoint = async (force = false): Promise<void> => {
+      if (!force && Date.now() - lastCheckpoint < 1000) return;
+      lastCheckpoint = Date.now();
+      const snapshot = Array.from(completedSet);
+      const next = checkpointChain.then(async () => {
+        for (const key of selectedKeys) {
+          if (options.partStore.sync) await options.partStore.sync(key);
+          else await options.partStore.flush?.(key);
+        }
+        for (const p of snapshot) committedSet.add(p);
+      }).catch(err => { throw new TorrentStorageError("提交 BT 数据失败", { cause: err }); });
+      checkpointChain = next;
+      await next;
+    };
     const inFlightSet = new Set<number>();
 
     const pendingPieces = requiredPieces.filter((p) => !completedSet.has(p));
 
-    const totalSelectedBytes = requiredPieces.reduce(
-      (sum, p) => sum + getPieceByteRange(meta, p).length,
-      0,
-    );
-
-    const calcDownloadedBytes = (): number => {
+    const totalSelectedBytes = meta.files.filter(f => selectedSet.has(f.index)).reduce((sum, f) => sum + f.length, 0);
+    const pieceBytes = new Map(requiredPieces.map(p => {
+      const range = getPieceByteRange(meta, p);
+      const bytes = meta.files.filter(f => selectedSet.has(f.index)).reduce((sum, f) =>
+        sum + Math.max(0, Math.min(f.offset + f.length, range.end) - Math.max(f.offset, range.start)), 0);
+      return [p, bytes];
+    }));
+    const calcDownloadedBytes = (pieces: ReadonlySet<number> = completedSet): number => {
       let bytes = 0;
-      for (const p of completedSet) {
-        bytes += getPieceByteRange(meta, p).length;
-      }
+      for (const p of pieces) bytes += pieceBytes.get(p) ?? 0;
       return Math.min(totalSelectedBytes, bytes);
     };
 
@@ -1361,18 +1406,21 @@ export async function runTorrentDownload(
         infoHash: meta.infoHash,
         state: "downloading",
         downloaded: effectiveDownloaded,
+        committedBytes: calcDownloadedBytes(committedSet),
         total: totalSelectedBytes,
         speedBps: displaySpeedBps,
         peers: currentPeerList.length,
         etaSecs,
         files: fileInfos,
-        completedPieces: Array.from(completedSet).sort((a, b) => a - b),
+        completedPieces: Array.from(committedSet).sort((a, b) => a - b),
         pieceLength: meta.pieceLength,
         pieceCount: meta.pieceHashes.length,
         segments: buildSegmentsView(),
         peerList: currentPeerList,
       });
     };
+
+    checkpointOnExit = async () => { await checkpoint(true); emitProgress(true); };
 
     if (helperSessionId) {
       const sid = helperSessionId;
@@ -1417,7 +1465,8 @@ export async function runTorrentDownload(
             );
             const offsetInFile = overlapStart - fileStart;
             const fileKey = `${options.partKeyPrefix}-file-${file.index}`;
-            await options.partStore.writeAt(fileKey, offsetInFile, sliceInPiece);
+            try { await options.partStore.writeAt(fileKey, offsetInFile, sliceInPiece); }
+            catch (err) { throw new TorrentStorageError("写入 BT 数据失败", { cause: err }); }
           }
         }
       };
@@ -1437,9 +1486,10 @@ export async function runTorrentDownload(
               for (const req of sliceReqs) {
                 const resp = await fetchFn(req.url, {
                   method: "GET",
-                  headers: {
+                  headers: await helperRequestHeaders(req.url, {
                     Range: `bytes=${req.rangeStart}-${req.rangeEnd}`,
-                  },
+                  }),
+                  redirect: new URL(req.url).origin === "http://127.0.0.1:16899" ? "error" : "follow",
                   signal: options.signal,
                 });
                 if (!resp.ok && resp.status !== 206) {
@@ -1559,6 +1609,7 @@ export async function runTorrentDownload(
               }
               await writePieceToSelectedFiles(pIdx, currentPieceBuffer);
               completedSet.add(pIdx);
+              await checkpoint();
               inFlightSet.delete(pIdx);
               streamingPartialBytes = Math.max(
                 0,
@@ -1585,9 +1636,10 @@ export async function runTorrentDownload(
           for (const req of sliceReqs) {
             const resp = await fetchFn(req.url, {
               method: "GET",
-              headers: {
+              headers: await helperRequestHeaders(req.url, {
                 Range: `bytes=${req.rangeStart}-${req.rangeEnd}`,
-              },
+              }),
+              redirect: new URL(req.url).origin === "http://127.0.0.1:16899" ? "error" : "follow",
               signal: options.signal,
             });
             if (!resp.ok && resp.status !== 206) {
@@ -1675,7 +1727,8 @@ export async function runTorrentDownload(
               try {
                 const ok = await downloadContiguousWebSeedBatch(batch, seedUrl);
                 if (ok) continue;
-              } catch {
+              } catch (err) {
+                if (err instanceof TorrentStorageError || options.signal.aborted) throw err;
                 // 若批量流式请求中途失败，回退逐个补齐未完成的 Piece
               }
             }
@@ -1685,6 +1738,7 @@ export async function runTorrentDownload(
               const pieceData = await fetchSinglePiece(pieceIndex);
               await writePieceToSelectedFiles(pieceIndex, pieceData);
               completedSet.add(pieceIndex);
+              await checkpoint();
               inFlightSet.delete(pieceIndex);
               downloadedBytes = calcDownloadedBytes();
               emitProgress(false);
@@ -1697,7 +1751,14 @@ export async function runTorrentDownload(
         }
       });
 
-      await Promise.all(workers);
+      let workerError: unknown;
+      await Promise.all(workers.map(async worker => {
+        try { await worker; }
+        catch (err) { if (workerError === undefined) workerError = err; group.abort(err); }
+      }));
+      if (workerError !== undefined) throw workerError;
+      options.signal.throwIfAborted();
+      await checkpoint(true);
       streamingPartialBytes = 0;
       emitProgress(true);
     }
@@ -1706,6 +1767,7 @@ export async function runTorrentDownload(
       if (selectedSet.has(file.index)) {
         const fileKey = `${options.partKeyPrefix}-file-${file.index}`;
         await options.partStore.flush?.(fileKey);
+        if (await options.partStore.size(fileKey) !== file.length) throw new Error(`BT 文件长度不匹配: ${file.path}`);
       }
     }
 
@@ -1731,13 +1793,14 @@ export async function runTorrentDownload(
       runtimeDetails,
     };
   } finally {
-    if (helperPollTimer) {
-      clearInterval(helperPollTimer);
-      helperPollTimer = null;
+    try { await checkpointOnExit?.(); }
+    finally {
+      if (helperPollTimer) {
+        clearInterval(helperPollTimer);
+        helperPollTimer = null;
+      }
+      if (helperSessionId) await stopHelperTorrentSession(helperSessionId).catch(() => {});
+      swarm?.close();
     }
-    if (helperSessionId) {
-      await stopHelperTorrentSession(helperSessionId).catch(() => {});
-    }
-    swarm?.close();
   }
 }

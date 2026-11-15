@@ -1,6 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
+  activateNativeHelperProtocol,
   exportDownloadedAgent,
+  ensureNativeHelper,
   getAgentInstallState,
   installNativeAgent,
   launchDownloadedAgent,
@@ -10,216 +12,113 @@ import { formatBytes } from "../format";
 import { useI18n } from "../i18n";
 import type { AgentInstallState } from "../protocol";
 
-export function AgentInstallModal({
-  open,
-  compact = false,
-  onClose,
-  onActivated,
-}: {
+export function AgentInstallModal({ open, compact = false, onClose, onActivated }: {
   open: boolean;
   compact?: boolean;
   onClose: () => void;
   onActivated: () => void | Promise<void>;
 }) {
   const { t } = useI18n();
-  const [state, setState] = useState<AgentInstallState>({
-    phase: "checking",
-    bytesReceived: 0,
-    totalBytes: 0,
-    downloadId: null,
-  });
+  const [state, setState] = useState<AgentInstallState>({ phase: "checking", bytesReceived: 0, totalBytes: 0, downloadId: null });
+  const [busy, setBusy] = useState(false);
+  const [needsAuthorization, setNeedsAuthorization] = useState(false);
+  const actionActive = useRef(false);
+  const actionFailed = useRef(false);
+  const visible = useRef(open);
+  const activated = useRef(false);
+  const onActivatedRef = useRef(onActivated);
+  const onCloseRef = useRef(onClose);
+  useEffect(() => { onActivatedRef.current = onActivated; onCloseRef.current = onClose; }, [onActivated, onClose]);
+  const completeActivation = async () => {
+    if (activated.current || !visible.current) return;
+    activated.current = true;
+    try { await onActivatedRef.current(); }
+    finally { onCloseRef.current(); }
+  };
 
   useEffect(() => {
+    visible.current = open;
     if (!open) return;
     let cancelled = false;
     let timer: number | undefined;
-
-    const poll = async () => {
+    activated.current = false;
+    actionFailed.current = false;
+    setNeedsAuthorization(false);
+    let lastProbe = 0;
+    const poll = async (initial = false) => {
       try {
-        const next = await getAgentInstallState();
+        let next = await getAgentInstallState();
         if (cancelled) return;
-        setState(next);
-        if (next.phase === "ready") {
-          void onActivated();
-          return;
-        }
-        if (
-          next.phase === "error" ||
-          next.phase === "need_manual_launch" ||
-          (next.phase === "confirming_save" && next.downloadId === null)
-        ) {
-          return;
-        }
-      } catch {
-        // ignore transient poll error
-      }
-      if (!cancelled) {
-        timer = window.setTimeout(() => void poll(), 200);
-      }
-    };
-
-    void (async () => {
-      try {
-        const existing = await getAgentInstallState();
+        if (initial && next.phase === "idle") next = await installNativeAgent();
         if (cancelled) return;
-        const activePhases = new Set([
-          "downloading",
-          "confirming_save",
-          "launching",
-          "waiting_ready",
-          "need_manual_launch",
-        ]);
-        const initial = activePhases.has(existing.phase)
-          ? existing
-          : await installNativeAgent();
-        if (cancelled) return;
-        setState(initial);
-        if (initial.phase === "ready") {
-          void onActivated();
-          return;
+        if (next.phase === "need_pairing" && !actionActive.current && Date.now() - lastProbe >= 2000) {
+          lastProbe = Date.now();
+          const status = await ensureNativeHelper(false);
+          if (cancelled) return;
+          if (status.available) next = { ...next, phase: "ready" };
         }
-        if (
-          initial.phase !== "error" &&
-          initial.phase !== "need_manual_launch" &&
-          !(initial.phase === "confirming_save" && initial.downloadId === null)
-        ) {
-          timer = window.setTimeout(() => void poll(), 200);
+        if (!actionActive.current && !actionFailed.current) setState(next);
+        if (next.phase === "ready" && !activated.current) {
+          await completeActivation();
         }
       } catch (err) {
-        if (!cancelled) {
-          setState({
-            phase: "error",
-            bytesReceived: 0,
-            totalBytes: 0,
-            downloadId: null,
-            message: err instanceof Error ? err.message : String(err),
-          });
-        }
+        if (!cancelled && !actionActive.current) setState(prev => ({ ...prev, phase: "error", message: String(err) }));
       }
-    })();
-
-    return () => {
-      cancelled = true;
-      if (timer !== undefined) window.clearTimeout(timer);
+      if (!cancelled) timer = window.setTimeout(() => void poll(), 400);
     };
-  }, [open, onActivated]);
+    void poll(true);
+    return () => { cancelled = true; visible.current = false; if (timer !== undefined) clearTimeout(timer); };
+  }, [open]);
 
-  if (!open) return null;
-
-  const pct =
-    state.totalBytes > 0
-      ? Math.min(100, Math.round((state.bytesReceived / state.totalBytes) * 100))
-      : state.phase === "confirming_save" ||
-          state.phase === "launching" ||
-          state.phase === "waiting_ready" ||
-          state.phase === "need_manual_launch" ||
-          state.phase === "ready"
-        ? 100
-        : 0;
-
-  const handleConfirmSave = async () => {
-    const next = await exportDownloadedAgent();
-    setState(next);
-    if (next.phase !== "error") {
-      // 开始轮询直到浏览器保存完成进入 need_manual_launch
-      const pollAfterSave = async () => {
-        const cur = await getAgentInstallState().catch(() => null);
-        if (!cur) return;
-        setState(cur);
-        if (cur.phase === "need_manual_launch" || cur.phase === "error" || cur.phase === "ready") {
-          return;
-        }
-        window.setTimeout(() => void pollAfterSave(), 200);
-      };
-      window.setTimeout(() => void pollAfterSave(), 200);
-    }
-  };
-
-  const handleManualLaunch = async () => {
-    const id = state.downloadId;
-    if (id === null) {
-      await resetAgentInstallState().catch(() => {});
-      setState({
-        phase: "error",
-        bytesReceived: 0,
-        totalBytes: 0,
-        downloadId: null,
-        message: t("agentInstall.fileMissing"),
-      });
-      return;
-    }
-
-    // 校验文件是否仍然存在于磁盘，防止下载后被删除导致点击死循环
+  const run = async (action: () => Promise<AgentInstallState>) => {
+    if (actionActive.current) return;
+    actionActive.current = true;
+    actionFailed.current = false;
+    setBusy(true);
     try {
-      const items = await chrome.downloads.search({ id });
-      const item = items[0];
-      if (!item || item.exists === false || item.state !== "complete") {
-        await resetAgentInstallState().catch(() => {});
-        setState({
-          phase: "error",
-          bytesReceived: 0,
-          totalBytes: 0,
-          downloadId: null,
-          message: t("agentInstall.fileMissing"),
-        });
-        return;
+      const next = await action();
+      if (visible.current) setState(next);
+      if (next.phase === "ready" && !activated.current && visible.current) {
+        await completeActivation();
       }
-      await chrome.downloads.open(id);
-    } catch {
-      await resetAgentInstallState().catch(() => {});
-      setState({
-        phase: "error",
-        bytesReceived: 0,
-        totalBytes: 0,
-        downloadId: null,
-        message: t("agentInstall.launchFailed"),
-      });
-      return;
-    }
-
-    setState((prev) => ({ ...prev, phase: "launching" }));
-    const next = await launchDownloadedAgent(id);
-    setState(next);
-    if (next.phase === "ready") {
-      await onActivated();
+    } catch (err) {
+      actionFailed.current = true;
+      if (visible.current) setState(prev => ({ ...prev, phase: "error", message: err instanceof Error ? err.message : String(err) }));
+    } finally {
+      actionActive.current = false;
+      if (visible.current) setBusy(false);
     }
   };
-
-  const handleRetry = async () => {
-    setState({
-      phase: "checking",
-      bytesReceived: 0,
-      totalBytes: 0,
-      downloadId: null,
-    });
-    const next = await installNativeAgent();
-    setState(next);
-    if (next.phase === "ready") {
-      await onActivated();
-    } else if (next.phase !== "error") {
-      const pollRetry = async () => {
-        const cur = await getAgentInstallState().catch(() => null);
-        if (!cur) return;
-        setState(cur);
-        if (
-          cur.phase === "ready" ||
-          cur.phase === "error" ||
-          cur.phase === "need_manual_launch" ||
-          (cur.phase === "confirming_save" && cur.downloadId === null)
-        ) {
-          if (cur.phase === "ready") void onActivated();
-          return;
-        }
-        window.setTimeout(() => void pollRetry(), 200);
-      };
-      window.setTimeout(() => void pollRetry(), 200);
+  if (!open) return null;
+  const pct = state.totalBytes > 0 ? Math.min(100, Math.round(state.bytesReceived / state.totalBytes * 100))
+    : ["confirming_save", "launching", "waiting_ready", "need_manual_launch", "need_pairing", "ready"].includes(state.phase) ? 100 : 0;
+  const handleConfirmSave = () => run(exportDownloadedAgent);
+  const handleManualLaunch = () => run(async () => {
+    const id = state.downloadId;
+    if (id === null) throw new Error(t("agentInstall.fileMissing"));
+    // Invoke while the click's user gesture is still active, before any await.
+    try { await chrome.downloads.open(id); }
+    catch { await resetAgentInstallState().catch(() => {}); throw new Error(t("agentInstall.launchFailed")); }
+    if (visible.current) setState(prev => ({ ...prev, phase: "launching" }));
+    return launchDownloadedAgent(id);
+  });
+  const handlePair = () => run(async () => {
+    if (!needsAuthorization) {
+      const status = await ensureNativeHelper(false);
+      if (status.available) return { ...state, phase: "ready", message: undefined };
+      if (status.updateRequired) throw new Error(t("agentInstall.updateRequired"));
+      setNeedsAuthorization(true);
+      return { ...state, phase: "need_pairing" };
     }
-  };
-
+    // The fallback is a separate user gesture, only for unregistered browser IDs.
+    const tab = await chrome.tabs.create({ url: `tug-agent://register?extId=${chrome.runtime.id}`, active: true });
+    const status = await activateNativeHelperProtocol(tab.id);
+    if (!status.available) throw new Error(t(status.updateRequired ? "agentInstall.updateRequired" : "agentInstall.pairFailed"));
+    return { ...state, phase: "ready", message: undefined };
+  });
+  const handleRetry = () => run(installNativeAgent);
   const handleClose = () => {
-    if (state.phase === "error" || state.phase === "ready") {
-      void resetAgentInstallState().catch(() => {});
-    }
+    if (state.phase === "ready") void resetAgentInstallState().catch(() => {});
     onClose();
   };
 
@@ -270,6 +169,7 @@ export function AgentInstallModal({
             {(state.phase === "launching" || state.phase === "waiting_ready") &&
               t("agentInstall.launching")}
             {state.phase === "need_manual_launch" && t("agentInstall.needManual")}
+            {state.phase === "need_pairing" && t(needsAuthorization ? "agentInstall.needAuthorization" : "agentInstall.needPairing")}
             {state.phase === "ready" && (
               <span className="ok">● {t("agentInstall.ready")}</span>
             )}
@@ -331,6 +231,7 @@ export function AgentInstallModal({
             <button
               type="button"
               className="btn btn-sm btn-primary"
+              disabled={busy}
               onClick={() => void handleConfirmSave()}
             >
               {t("agentInstall.confirmSaveBtn")}
@@ -340,15 +241,20 @@ export function AgentInstallModal({
             <button
               type="button"
               className="btn btn-sm btn-primary"
+              disabled={busy}
               onClick={() => void handleManualLaunch()}
             >
               {t("agentInstall.manualBtn")}
             </button>
           )}
+          {state.phase === "need_pairing" && (
+            <button type="button" className="btn btn-sm btn-primary" disabled={busy} onClick={() => void handlePair()}>{t(needsAuthorization ? "agentInstall.authorizeBtn" : "agentInstall.pairBtn")}</button>
+          )}
           {state.phase === "error" && (
             <button
               type="button"
               className="btn btn-sm btn-primary"
+              disabled={busy}
               onClick={() => void handleRetry()}
             >
               {t("agentInstall.retry")}

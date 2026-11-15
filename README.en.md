@@ -1,130 +1,63 @@
 # Tug Web
 
-<p align="center">
-  <img src="public/tug-icon.png" alt="Tug Web Logo" width="108" />
-</p>
+<p align="center"><img src="public/tug-icon.png" alt="Tug Web" width="108" /></p>
 
-<p align="center">
-  <strong>100% Standalone Multi-Connection HTTP & BitTorrent / Magnet P2P Download Manager Extension (Chrome / Edge Manifest V3)</strong>
-</p>
+**An independent multi-connection HTTP and BitTorrent/Magnet browser downloader with an optional Tug Agent.**
 
-<p align="center">
-  <a href="./README.md">简体中文</a> | English
-</p>
+[简体中文](README.md) | English
 
----
+Tug Web targets Chromium browsers (Chrome/Edge Manifest V3) and does not depend on Tug Desktop. HTTP and WebTorrent/WebSeed run inside Offscreen Document + OPFS. The optional Windows Agent adds traditional BT TCP/UDP/DHT and system file export/opening. The extension remains the sole owner of the queue, settings and recovery state.
 
-**Tug Web** is a **100% standalone browser download manager extension** in the Tug family built for Chromium-based browsers (Chrome, Edge, Brave, Arc). It requires **no desktop companion app and no Native Messaging binary**—all download scheduling, multi-connection HTTP range segmentation, BitTorrent/Magnet swarming, and random-access disk persistence run directly inside the browser via **Offscreen Document + OPFS (Origin Private File System)**:
+## Features
 
-- **Multi-Connection Segmented HTTP/HTTPS Engine (1–32 Connections) with Dynamic Work Stealing**
-- **In-Browser BitTorrent (`.torrent`) & Magnet (`magnet:?xt=urn:btih:...`) Engine** (WebTorrent WebRTC DataChannel P2P + BEP 19 HTTP/HTTPS WebSeed hybrid acceleration + per-piece SHA-1 verification)
-- **Automatic Browser Download Takeover, Magnet Click Capture, Context Menus & Batch Link Sniffer**
+- **HTTP/HTTPS**: 1–32 configured connections with a balanced, bounded Range job queue. Plain HTTP or identified HTTP/1.1 uses up to six effective workers, without recursively splitting queued requests; HTTPS/HTTP/2 retains configured concurrency.
+- **Validated resume**: exact 206 range/length checks and strong ETag or Last-Modified/If-Range validation. Only acknowledged, synchronized writes enter persistent checkpoints. Non-Range probes use a single stream; mid-download resource changes fail explicitly.
+- **Incremental SHA-256**, a shared rate limiter, network idle timeouts, and separate downloading/verifying/saving stages.
+- **Torrent/Magnet**: WebRTC WebTorrent, HTTP WebSeed, per-piece SHA-1, local/remote torrents, `xs=`/`ws=` and selective files. The Agent connects to traditional TCP/UDP/DHT peers.
+- **Bounded-memory storage**: random OPFS writes through a dedicated SyncAccessHandle worker, with a WritableFileStream fallback. Reset and resume have distinct semantics; storage errors propagate.
+- **Recoverable export**: browser download API or an authorized Agent; per-file BT export results let retries skip saved files. Cache cleanup follows completion.
+- Download interception, context menus, magnet capture, Alt bypass, popup/manager/settings, Chinese/English and light/dark themes.
 
----
+The Agent currently **does not download HTTP sources**. Browser and server protocol limits still affect effective concurrency; selecting 32 does not guarantee 32 active connections to every origin.
 
-## Key Features
+## Build and load
 
-### 1. 100% Standalone — Zero External Dependencies
-- Runs entirely inside the browser extension sandbox with no requirement for `Tug Desktop`, Python, Node.js, or external helper binaries.
-- Built on a dual-layer **Service Worker + Offscreen Document** architecture so downloads continue uninterrupted when the popup is closed or tabs are switched.
+Node.js >= 22 and Chrome/Edge >= 116 are required. Building the Agent also requires Rust.
 
-### 2. Multi-Connection HTTP/HTTPS Engine with Work Stealing
-- Automatically probes `Accept-Ranges`, `Content-Range`, `ETag`, and `Last-Modified`, and decodes RFC 5987 / RFC 6266 `Content-Disposition` filenames.
-- Supports **1–32 concurrent connections**. When a worker finishes its assigned byte range early, it dynamically splits the largest remaining active segment (`>= 256 KiB`) in half (**Work Stealing**) to maximize tail throughput.
-- Crash-safe pause & resume backed by `IndexedDB` segment checkpoints and `ETag` verification, with automatic single-stream fallback when a server responds with `200 OK`.
-- Optional **SHA-256 checksum verification** and **global token-bucket bandwidth rate limiting (KiB/s)**.
-
-### 3. Hybrid In-Browser BitTorrent & Magnet Engine
-- Zero-dependency **Bencode encoder/decoder** with exact raw `info` slice extraction for 20-byte SHA-1 `info_hash` calculation.
-- Supports local `.torrent` file uploads, remote `.torrent` URLs, and `magnet:?xt=urn:btih:...` links (both 40-char Hex and 32-char Base32).
-- **WebTorrent (WebRTC DataChannel) + WebSocket Trackers (`wss://`)**: exchanges pieces with browser peers using the BitTorrent peer wire protocol (`bitfield`, `interested`, `unchoke`, `request`, `piece`) and fetches magnet metadata via **BEP 10 / BEP 9 (`ut_metadata`)**.
-- **BEP 19 HTTP/HTTPS WebSeed (`url-list` / `ws=`) + `xs=` Exact Metadata Source**: accelerates open-source distributions and hybrid torrents with concurrent HTTP range piece fetching and strict per-piece **SHA-1 verification**.
-- Supports **selective file downloading (`onlyFiles`)** for multi-file torrents.
-
-### 4. OPFS Zero-RAM Random Disk Storage & System Export
-- Writes HTTP segments and BitTorrent pieces directly to disk at arbitrary byte offsets via `FileSystemFileHandle.createWritable({ keepExistingData: true })` + `seek(offset)`, avoiding in-memory `Blob` concatenation for large multi-gigabyte downloads.
-- Automatically (or manually) exports completed files to the OS Downloads folder via `chrome.downloads` and cleans up temporary OPFS cache.
-
-### 5. Smart Download Interception & Tug Material You UI
-- Configurable `chrome.downloads.onCreated` takeover, minimum file-size threshold (MB), extension allowlist, domain blocklist, and `Alt`-click temporary bypass.
-- Crafted with the Tug family's **Material You Olive & Warm Cream (Light & Dark)** design system, featuring a **Toolbar Popup**, **Full-Page Download Manager (`manager.html`)**, **Options Page (`options.html`)**, and built-in **Simplified Chinese (`zh-CN`) / English (`en-US`)** localization.
-
----
-
-## Project Layout
-
-```text
-Tug-Web/
-├── docs/
-│   ├── architecture.md          # MV3 standalone architecture, OPFS storage & module design
-│   ├── protocol.md              # Internal extension RPC bus protocol & engine schemas
-│   ├── privacy.md               # Least-privilege permissions & privacy policy
-│   └── testing.md               # Automated test suite & manual QA checklist
-├── public/
-│   ├── manifest.json            # Chrome / Edge Manifest V3 manifest
-│   ├── icons/                   # 16 / 32 / 48 / 64 / 128 extension icons
-│   └── _locales/                # zh_CN / en Chrome extension locale bundles
-├── scripts/
-│   └── build-extension.mjs      # Bundles background.js / content.js and syncs dist/extension
-├── src/
-│   ├── shared/                  # Types, RPC client, filename sanitizer, formatters, i18n, styles
-│   ├── engine/
-│   │   ├── storage/             # OPFS random-write store (part-store.ts) & IndexedDB store (task-store.ts)
-│   │   ├── http/                # HTTP Range multi-connection downloader, work stealing & rate limiter
-│   │   ├── torrent/             # Bencode codec, Torrent/Magnet parser, WebTorrent + WebSeed session
-│   │   └── core/                # TaskManager scheduler, pause/resume & system file export
-│   ├── offscreen/               # Offscreen Document host for persistent downloads & WebRTC
-│   ├── background/              # MV3 Service Worker: interception, context menus, badge & notifications
-│   ├── content/                 # Magnet link capture, Alt-key bypass tracking & page link sniffer
-│   ├── popup/                   # Toolbar Popup mini dashboard
-│   ├── manager/                 # Full-screen Download Manager workspace
-│   └── options/                 # Standalone extension options page
-└── tests/                       # Automated tests (Bencode, HTTP Range engine, BT/Magnet, interceptor & i18n)
-```
-
----
-
-## Quick Start
-
-### Prerequisites
-- **Node.js** `>= 22` (Node.js 24 LTS recommended)
-- **Chrome** `>= 116` or **Microsoft Edge** `>= 116`
-
-### Install, Test & Build
-
-```bash
-# 1. Install dependencies
-npm install
-
-# 2. Run strict TypeScript type-checking
+```powershell
+npm ci
 npm run check
-
-# 3. Run unit & integration tests
 npm test
-
-# 4. Build the production extension (outputs to dist/ and dist/extension/)
 npm run build
 ```
 
-### Load Unpacked Extension in Chrome / Edge
-1. Open your browser and navigate to:
-   - **Chrome**: `chrome://extensions/`
-   - **Edge**: `edge://extensions/`
-2. Enable **Developer mode** in the top-right corner.
-3. Click **Load unpacked**.
-4. Select `D:\git\Tug-Web\dist` (or `D:\git\Tug-Web\dist\extension`).
+Enable developer mode at `chrome://extensions` or `edge://extensions`, then load `dist/` or `dist/extension/`.
 
----
+On Windows, double-click the root `build.bat` to build `dist` (installing missing dependencies), then reload the extension. `agent/build.bat` builds Release and copies the executable to `agent/tug-agent.exe`. Pass `--no-pause` for command-line automation; failures return a nonzero exit code.
 
-## Documentation
+See [Agent setup](agent/README.md). This extension requires **Agent protocol 2**; older versions show an update notice and are not used through unauthenticated endpoints. Update both components together.
 
-- [Architecture Design (`docs/architecture.md`)](docs/architecture.md)
-- [Internal RPC Protocol (`docs/protocol.md`)](docs/protocol.md)
-- [Privacy & Permissions (`docs/privacy.md`)](docs/privacy.md)
-- [Testing & QA Guide (`docs/testing.md`)](docs/testing.md)
+## Verify
 
----
+```powershell
+npm run test:browser
+npm run test:agent
+npm run bench:http -- --connections=8,32
+```
 
-## License
+Browser tests use an installed Playwright Chromium or `TUG_TEST_BROWSER`. They create isolated profiles. Agent tests use isolated directories and native stdio authorization without registry installation.
 
-Licensed under the [Apache License 2.0](LICENSE).
+See [testing](docs/testing.md), [architecture](docs/architecture.md), [protocol](docs/protocol.md), [privacy](docs/privacy.md) and [implementation notes](docs/implementation-notes.md).
+
+## Layout
+
+- `src/engine/http`: Range jobs, validation, timeouts, incremental checksum and rate limiting.
+- `src/engine/storage`: OPFS worker, memory backend and IndexedDB.
+- `src/engine/torrent`: parsers, WebRTC/WebSeed and Agent client.
+- `src/engine/core`: task scheduling, checkpoints and per-file export.
+- `src/background`, `src/offscreen`: browser integration and engine host.
+- `src/manager`, `src/popup`, `src/options`: UI.
+- `agent`: the optional Windows helper, without a task database.
+- `tests`, `scripts`: regression/integration tests and benchmarks.
+
+Apache License 2.0; see [LICENSE](LICENSE).

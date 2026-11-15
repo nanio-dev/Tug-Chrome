@@ -27,6 +27,8 @@ pub fn spawn_native_messaging_stdio_loop(state: Arc<AppState>) {
             "baseUrl": format!("http://127.0.0.1:{}", state.bound_port),
             "port": state.bound_port,
             "version": env!("CARGO_PKG_VERSION"),
+            "protocolVersion": crate::auth::PROTOCOL_VERSION,
+            "token": crate::auth::native_token().ok(),
         });
         let _ = write_native_messaging_frame(&ready);
 
@@ -52,6 +54,8 @@ pub fn spawn_native_messaging_stdio_loop(state: Arc<AppState>) {
                 "type": "pong",
                 "baseUrl": format!("http://127.0.0.1:{}", state.bound_port),
                 "port": state.bound_port,
+                "protocolVersion": crate::auth::PROTOCOL_VERSION,
+                "token": crate::auth::native_token().ok(),
             });
             let _ = write_native_messaging_frame(&pong);
         }

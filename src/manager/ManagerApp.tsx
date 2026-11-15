@@ -38,6 +38,7 @@ import {
 import { I18nProvider, useI18n } from "../shared/i18n";
 import {
   DEFAULT_SETTINGS,
+  isActiveTaskState,
   type AddTaskInput,
   type AppInfo,
   type Settings,
@@ -208,7 +209,7 @@ function ManagerInner({
     const pct = calcProgressPercent(task.downloaded, task.total);
     const speed = formatSpeed(task.speedBps);
     const done = isCompleted(task);
-    const active = task.state === "downloading" || task.state === "fetching_metadata" || task.state === "queued";
+    const active = isActiveTaskState(task.state);
 
     return (
       <div
@@ -449,7 +450,8 @@ function ManagerInner({
                 }}
                 onClick={() => void onWakeHelper()}
               >
-                {wakingHelper ? t("sidebar.helperConnecting") : t("sidebar.helperStandby")}
+                {wakingHelper ? t("sidebar.helperConnecting") : helperStatus?.updateRequired
+                  ? t("sidebar.helperUpdateRequired") : t("sidebar.helperStandby")}
               </b>
             )}
           </div>

@@ -31,6 +31,7 @@ export type CommandType =
   | "prepare_request_headers"
   | "clear_request_headers"
   | "export_blob_to_downloads"
+  | "cancel_task_export"
   | "get_native_helper_status"
   | "ensure_native_helper"
   | "activate_native_helper_protocol"
@@ -53,6 +54,7 @@ export type AgentInstallPhase =
   | "launching"
   | "waiting_ready"
   | "need_manual_launch"
+  | "need_pairing"
   | "ready"
   | "error";
 
@@ -71,6 +73,10 @@ export interface NativeHelperStatus {
   version?: string;
   port?: number;
   activeSessions?: number;
+  protocolVersion?: number;
+  updateRequired?: boolean;
+  pairingRequired?: boolean;
+  nativeError?: string;
 }
 
 export interface ExtensionRequest<T = unknown> {
@@ -118,6 +124,7 @@ export interface PrepareHeadersPayload {
 }
 
 export interface ExportBlobPayload {
+  exportId: string;
   taskId: number;
   blobUrl: string;
   relativePath: string;

@@ -399,7 +399,7 @@ export function SettingsView({
                         ? t("settings.btHelperOnline", {
                             port: helperStatus.port ?? 16899,
                           })
-                        : t("settings.btHelperStandby")}
+                        : helperStatus.updateRequired ? t("sidebar.helperUpdateRequired") : t("settings.btHelperStandby")}
                   </div>
                   <div className="hint" style={{ marginTop: "4px" }}>
                     {t("settings.btHelperDesc")}

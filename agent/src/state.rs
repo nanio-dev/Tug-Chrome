@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Context;
 use librqbit::{DhtSessionConfig, ListenerOptions, ManagedTorrent, Session, SessionOptions};
-use tokio::sync::RwLock;
+use tokio::sync::{OnceCell, RwLock};
 
 use crate::config::DHT_BOOTSTRAP;
 
@@ -21,15 +21,35 @@ pub struct ManagedSessionEntry {
 
 /// 进程级共享状态，供 Axum 路由与后台空闲巡检任务访问。
 pub struct AppState {
-    pub bt_session: Arc<Session>,
+    pub bt_session: OnceCell<Arc<Session>>,
+    pub bt_networking: bool,
     pub stage_root: PathBuf,
     pub entries: RwLock<HashMap<usize, ManagedSessionEntry>>,
     pub last_activity_secs: AtomicU64,
     pub native_stdin_active: AtomicBool,
+    pub active_operations: AtomicU64,
     pub bound_port: u16,
 }
 
+pub struct ActiveOperation<'a>(&'a AtomicU64);
+impl Drop for ActiveOperation<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
 impl AppState {
+    pub fn begin_operation(&self) -> ActiveOperation<'_> {
+        self.touch();
+        self.active_operations.fetch_add(1, Ordering::Relaxed);
+        ActiveOperation(&self.active_operations)
+    }
+    pub async fn bt_session(&self) -> anyhow::Result<&Arc<Session>> {
+        self.bt_session
+            .get_or_try_init(|| init_bt_session(self.stage_root.clone(), self.bt_networking))
+            .await
+    }
+
     /// 刷新最近一次请求活跃时间，重置空闲自动退出计时器。
     pub fn touch(&self) {
         self.last_activity_secs.store(now_secs(), Ordering::Relaxed);
@@ -54,20 +74,25 @@ pub fn rand_u32() -> u32 {
 }
 
 /// 创建无状态 `librqbit::Session`（禁用持久化与 UPnP 阻塞，启用 DHT 与 TCP/uTP 监听）。
-pub async fn init_bt_session(stage_root: PathBuf) -> anyhow::Result<Arc<Session>> {
+pub async fn init_bt_session(
+    stage_root: PathBuf,
+    networking: bool,
+) -> anyhow::Result<Arc<Session>> {
     let session_opts = SessionOptions {
         fastresume: false,
         persistence: None,
-        dht: Some(DhtSessionConfig {
+        dht: networking.then(|| DhtSessionConfig {
             bootstrap_addrs: Some(DHT_BOOTSTRAP.iter().map(|s| (*s).to_owned()).collect()),
             ..Default::default()
         }),
-        listen: Some(ListenerOptions {
+        listen: networking.then(|| ListenerOptions {
             listen_addr: SocketAddr::new(Ipv6Addr::UNSPECIFIED.into(), 0),
             enable_upnp_port_forwarding: false,
             ..Default::default()
         }),
         peer_limit: Some(150),
+        disable_trackers: !networking,
+        disable_local_service_discovery: !networking,
         client_name_and_version: Some(format!("TugAgent/{}", env!("CARGO_PKG_VERSION"))),
         ..Default::default()
     };

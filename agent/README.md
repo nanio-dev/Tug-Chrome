@@ -20,7 +20,7 @@
 | **任务队列与持久化** | `IndexedDB` (`TaskRecord`) 唯一维护所有任务状态 | **不保存任何任务数据库**（`persistence: None`） |
 | **断点续传与分片位图** | 插件端记录已校验通过的 `btCompletedPieces` | 按需根据 HTTP `Range` 请求即时拉取指定字节范围 |
 | **分片校验与存储** | 插件端逐 Piece 执行 SHA-1 校验并写入浏览器 `OPFS` | 仅在系统 `%TEMP%\tug-agent-stage` 维护会话期临时缓冲，任务暂停/停止/完成时立即删除 |
-| **生命周期** | 随浏览器运行 | **按需拉起，空闲 120 秒自动退出**（零常驻内存/CPU 占用） |
+| **生命周期** | 随浏览器运行 | 按需启动；Native Messaging 连接期间保活，无连接、无活动会话/操作且空闲 120 秒后退出 |
 | **容灾能力** | 即使下载到 50% 时关闭或卸载代理，前 50% 分片仍完整保存在插件 `OPFS` 中 | 随时可杀、随时重建 |
 
 ---
@@ -70,14 +70,16 @@ agent/
 
 ### 3.2 自动绑定与静默按需唤醒
 1. **自定义协议注册**：写入 `HKCU\Software\Classes\tug-agent`（`tug-agent://`），并带 `CREATE_NO_WINDOW` 标志静默启动守护实例。
-2. **自动绑定扩展 ID**：插件启动或用户在设置页点击「唤醒并绑定 Tug Agent (`tug-agent://`)」时，插件调用 `POST http://127.0.0.1:16899/register` 或拉起 `tug-agent://register?extId=<chrome.runtime.id>`，幂等地将 `chrome-extension://<extId>/` 写入 `cc.nanio.tug.agent.json` 的 `allowed_origins`。
-3. **日常静默按需唤醒**：绑定完成后，当插件需要解析磁力链接、下载纯 TCP/UDP 种子或导出完成文件时，后台 Service Worker 调用 `chrome.runtime.connectNative("cc.nanio.tug.agent")`，浏览器在后台静默拉起 `tug-agent.exe`（全程无黑框），下载结束空闲 120 秒后自动退出。
+2. **自动绑定扩展 ID**：插件启动或用户在设置页点击「唤醒并绑定 Tug Agent (`tug-agent://`)」时，插件通过用户明确点击拉起 `tug-agent://register?extId=<chrome.runtime.id>`，幂等地将 `chrome-extension://<extId>/` 写入 `cc.nanio.tug.agent.json` 的 `allowed_origins`。
+3. **日常静默按需唤醒**：绑定完成后，当插件需要解析磁力链接、下载纯 TCP/UDP 种子或导出完成文件时，后台 Service Worker 调用 `chrome.runtime.connectNative("cc.nanio.tug.agent")`，浏览器在后台静默拉起 `tug-agent.exe`（全程无黑框），保留已授权的原生连接，避免浏览器终止宿主。切换纯插件模式/浏览器断开后，若无会话和操作且空闲 120 秒则退出。
 
 ---
 
 ## 4. 本地 HTTP 代理接口规范 (`http://127.0.0.1:16899`)
 
-所有接口均内置 CORS 响应头（`Access-Control-Allow-Origin: *`），仅绑定本地回环地址 `127.0.0.1`。
+服务仅绑定 `127.0.0.1`。协议版本为 **2**：除只读 `/health` 外，所有接口要求 `X-Tug-Agent-Token`。32 字节随机能力凭据只通过 Native Messaging 的 `ready` / `pong` 帧交给已配对扩展，不通过 HTTP 暴露；扩展仅存入 `chrome.storage.session`，Agent 存放于当前用户应用目录的 `TugAgent/auth-token`。授权凭据不是任务数据库。
+
+CORS 只反射合法扩展来源，不允许网页来源或 `*`。旧版 Agent 会被新版插件标记为需要更新。首次配对仍使用安装器/`tug-agent://register?extId=...` 绑定扩展 ID，然后建立 Native Messaging 连接。Agent 当前不接管 HTTP 源站下载。
 
 ### 4.1 健康检查与状态探测
 - **`GET /health`**
@@ -136,6 +138,8 @@ agent/
   - 响应：立即从 `librqbit` 移除会话并物理删除 `%TEMP%\tug-agent-stage\s-*` 临时目录。
 
 ### 4.7 本地文件系统辅助接口（免 `blob:` 弹窗落盘与目录定位）
+所有接口先校验能力凭据。打开/删除仅允许实际 Downloads 根目录内的目标，拒绝目录穿越；导出还拒绝链接目录。数据先写同目录临时文件并同步，完成后不覆盖地发布最终文件，中断时清理临时文件。
+
 - **`POST /fs/export`**
   - 请求头：`X-Relative-Path: <URL 编码的相对路径，如 Tug/video.mp4>`
   - 请求体：文件二进制流（`Blob` / `ReadableStream`）
@@ -152,6 +156,8 @@ agent/
 ## 5. 编译与安装指南
 
 ### 编译 Release 可执行文件
+Windows 可直接双击本目录的 `build.bat`，自动构建 Release 并将二进制输出到本目录的 `tug-agent.exe`。命令行可使用 `build.bat --no-pause`，失败会返回非零退出码。脚本仅构建和复制，不安装或启动 Agent。
+
 ```powershell
 cd D:\git\Tug-Web\agent
 cargo build --release
@@ -167,3 +173,17 @@ Copy-Item .\target\release\tug-agent.exe .\tug-agent.exe -Force
 ```powershell
 Invoke-RestMethod -Uri "http://127.0.0.1:16899/health"
 ```
+
+### 自动化验证与开发模式
+
+仓库根目录运行 `npm run test:agent`：以隔离用户目录启动真实 Agent，通过原生 stdio 获取授权，验证导出、并发重名、中断清理、来源授权和路径限制，不安装服务或修改注册表。
+
+`--serve-only --native-stdio --port=0` 为隔离测试/开发模式：跳过安装与迁移，禁用 BT 网络，在随机回环端口提供 API。常规运行仍使用 16899 和完整 BT 网络。
+
+## 开发版安装与诊断
+
+先运行 agent/build.bat，再运行根目录 build.bat，并提交推送 agent/tug-agent.exe。插件从固定的 GitHub raw 链接下载，附加 ?t=时间戳 并使用 no-store，便于模拟正常安装。
+
+浏览器将安装文件保存为 tug-agent-<当前扩展ID>.exe；Agent 从合法文件名取得 ID，迁移到常驻目录时传递该 ID，首次启动即可建立 Native Messaging 授权。请保留安装文件名。已配对浏览器直接静默重连；手动运行通用 tug-agent.exe、扩展 ID 改变或安装文件被改名时，才需要一次协议授权。连接成功会刷新状态并自动关闭弹窗。
+
+升级前退出旧 Agent 实例，Windows 不允许覆盖运行中的 EXE。开发目录旁有 Cargo.toml 时不会迁移，注册表直接指向开发二进制；正常安装迁移到 LOCALAPPDATA/TugAgent。启动日志在 LOCALAPPDATA/TugAgent/startup.log。BT 引擎按首次请求初始化。

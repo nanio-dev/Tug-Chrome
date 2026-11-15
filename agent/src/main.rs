@@ -11,6 +11,7 @@
 //! - `streamer`: `/webseed/{id}/{*tail}` BEP 19 HTTP Range (`206 Partial Content`) 分片流式读取
 //! - `file_ops`: `/fs/export`、`/fs/open`、`/fs/delete` 零弹窗文件落盘与资源管理器交互
 
+mod auth;
 mod config;
 mod file_ops;
 mod native_messaging;
@@ -18,6 +19,8 @@ mod registry;
 mod routes;
 mod state;
 mod streamer;
+#[cfg(windows)]
+mod windows_registry;
 
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr};
@@ -32,7 +35,7 @@ use axum::Router;
 use axum::http::{Method, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
-use tokio::sync::RwLock;
+use tokio::sync::{OnceCell, RwLock};
 
 #[cfg(target_os = "windows")]
 use crate::config::CREATE_NO_WINDOW;
@@ -44,15 +47,60 @@ use crate::routes::{
     handle_health, handle_options, handle_register, handle_session_peers, handle_start_session,
     handle_stop_session, handle_uninstall, json_error, with_cors,
 };
-use crate::state::{AppState, init_bt_session, now_secs};
+use crate::state::{AppState, now_secs};
 use crate::streamer::handle_webseed_stream;
 
+fn startup_log(message: &str) {
+    use std::io::Write;
+    if let Some(base) = std::env::var_os("LOCALAPPDATA") {
+        let dir = std::path::PathBuf::from(base).join("TugAgent");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("startup.log");
+        if std::fs::metadata(&path).is_ok_and(|m| m.len() > 128 * 1024) {
+            let _ = std::fs::remove_file(&path);
+        }
+        if let Ok(mut log) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        {
+            let _ = writeln!(log, "[{}] {}", now_secs(), message);
+        }
+    }
+}
+
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    if maybe_migrate_to_app_dir() {
+async fn main() {
+    if let Err(err) = run().await {
+        startup_log(&format!("Startup failed: {err:#}"));
+        if std::env::args().any(|a| a.starts_with("chrome-extension://") || a == "--native-stdio") {
+            let _ = write_native_messaging_frame(
+                &serde_json::json!({"ok": false, "type": "error", "message": format!("{err:#}")}),
+            );
+        }
+        std::process::exit(1);
+    }
+}
+
+async fn run() -> anyhow::Result<()> {
+    let startup = std::time::Instant::now();
+    startup_log(&format!(
+        "Starting protocol {} from {}",
+        auth::PROTOCOL_VERSION,
+        std::env::current_exe()?.display()
+    ));
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    // A foreground service mode enables isolated integration tests/development,
+    // without installing a host, migrating the binary, or changing the registry.
+    let serve_only = args.iter().any(|a| a == "--serve-only");
+    if !serve_only && maybe_migrate_to_app_dir() {
         return Ok(());
     }
-    let (is_native_messaging, install_only) = parse_cli_and_register();
+    let (is_native_messaging, install_only) = if serve_only {
+        (args.iter().any(|a| a == "--native-stdio"), false)
+    } else {
+        parse_cli_and_register()?
+    };
     if install_only {
         if let Ok(exe_path) = std::env::current_exe() {
             let mut cmd = Command::new(exe_path);
@@ -63,9 +111,19 @@ async fn main() -> anyhow::Result<()> {
         }
         return Ok(());
     }
+    let token = auth::native_token()?;
 
     // 检查 127.0.0.1:16899 是否已经有正在运行的 helper 实例
-    let target_addr = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), DEFAULT_PORT);
+    let port = if serve_only {
+        args.iter()
+            .find_map(|a| a.strip_prefix("--port="))
+            .map(str::parse::<u16>)
+            .transpose()?
+            .unwrap_or(DEFAULT_PORT)
+    } else {
+        DEFAULT_PORT
+    };
+    let target_addr = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), port);
     let listener = match tokio::net::TcpListener::bind(target_addr).await {
         Ok(l) => l,
         Err(_) => {
@@ -73,9 +131,11 @@ async fn main() -> anyhow::Result<()> {
                 let ready = serde_json::json!({
                     "ok": true,
                     "type": "ready",
-                    "baseUrl": format!("http://127.0.0.1:{DEFAULT_PORT}"),
-                    "port": DEFAULT_PORT,
+                    "baseUrl": format!("http://127.0.0.1:{port}"),
+                    "port": port,
                     "version": env!("CARGO_PKG_VERSION"),
+                    "protocolVersion": auth::PROTOCOL_VERSION,
+                    "token": token,
                 });
                 let _ = write_native_messaging_frame(&ready);
             }
@@ -88,14 +148,14 @@ async fn main() -> anyhow::Result<()> {
     let _ = std::fs::remove_dir_all(&stage_root);
     std::fs::create_dir_all(&stage_root)?;
 
-    let bt_session = init_bt_session(stage_root.clone()).await?;
-
     let state = Arc::new(AppState {
-        bt_session,
+        bt_session: OnceCell::new(),
+        bt_networking: !serve_only,
         stage_root: stage_root.clone(),
         entries: RwLock::new(HashMap::new()),
         last_activity_secs: AtomicU64::new(now_secs()),
         native_stdin_active: AtomicBool::new(false),
+        active_operations: AtomicU64::new(0),
         bound_port,
     });
 
@@ -109,12 +169,12 @@ async fn main() -> anyhow::Result<()> {
         loop {
             tokio::time::sleep(Duration::from_secs(15)).await;
             let active_count = idle_state.entries.read().await.len();
-            if active_count > 0 {
+            if active_count > 0 || idle_state.active_operations.load(Ordering::Relaxed) > 0 {
                 idle_state.touch();
                 continue;
             }
-            let elapsed = now_secs()
-                .saturating_sub(idle_state.last_activity_secs.load(Ordering::Relaxed));
+            let elapsed =
+                now_secs().saturating_sub(idle_state.last_activity_secs.load(Ordering::Relaxed));
             if elapsed >= IDLE_TIMEOUT_SECS
                 && !idle_state.native_stdin_active.load(Ordering::Relaxed)
             {
@@ -143,19 +203,10 @@ async fn main() -> anyhow::Result<()> {
             "/webseed/{id}/{*tail}",
             get(handle_webseed_stream).options(handle_options),
         )
-        .route(
-            "/fs/export",
-            post(handle_fs_export).options(handle_options),
-        )
+        .route("/fs/export", post(handle_fs_export).options(handle_options))
         .route("/fs/open", post(handle_fs_open).options(handle_options))
-        .route(
-            "/fs/delete",
-            post(handle_fs_delete).options(handle_options),
-        )
-        .route(
-            "/uninstall",
-            post(handle_uninstall).options(handle_options),
-        )
+        .route("/fs/delete", post(handle_fs_delete).options(handle_options))
+        .route("/uninstall", post(handle_uninstall).options(handle_options))
         .fallback(|method: Method| async move {
             if method == Method::OPTIONS {
                 with_cors(StatusCode::NO_CONTENT.into_response())
@@ -163,8 +214,16 @@ async fn main() -> anyhow::Result<()> {
                 json_error(StatusCode::NOT_FOUND, "Not found")
             }
         })
-        .with_state(state);
+        .with_state(state)
+        .layer(axum::middleware::from_fn_with_state(
+            Arc::new(auth::Authorization::new(token)),
+            auth::authorize,
+        ));
 
+    startup_log(&format!(
+        "Listening on {bound_port}, ready in {} ms; BT initializes on demand",
+        startup.elapsed().as_millis()
+    ));
     axum::serve(listener, app).await?;
     Ok(())
 }

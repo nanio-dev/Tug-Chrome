@@ -5,6 +5,7 @@ import {
 } from "../../shared/filename";
 import {
   normalizeSettings,
+  isActiveTaskState,
   type AddTaskInput,
   type AppInfo,
   type SegmentView,
@@ -44,6 +45,7 @@ export interface TaskManagerHooks {
     taskId: number;
     blob: Blob;
     relativePath: string;
+    signal?: AbortSignal;
   }) => Promise<number | null | { downloadId: number | null; savedPath?: string | null }>;
   onDeleteSystemDownload?: (chromeDownloadId: number) => Promise<void>;
   onNotifyTaskFinished?: (task: TaskView) => void;
@@ -57,6 +59,8 @@ interface ActiveRuntime {
   view: TaskView;
   lastPersistMs: number;
   btPeers: TorrentPeerInfo[];
+  persistence: Promise<void>;
+  persistenceError?: unknown;
 }
 
 export class TaskManager {
@@ -68,6 +72,8 @@ export class TaskManager {
   private settings: Settings | null = null;
   private initPromise: Promise<void> | null = null;
   private pumpChain: Promise<void> = Promise.resolve();
+  private schedulingHolds = 0;
+  private readonly unpersistedFailures = new Map<number, TaskView>();
 
   constructor(options?: {
     store?: TaskStoreBackend;
@@ -98,11 +104,7 @@ export class TaskManager {
     // 恢复上次未正常结束的活动任务为 paused，已完成任务保持 completed
     const records = await this.store.list();
     for (const record of records) {
-      if (
-        record.state === "downloading" ||
-        record.state === "fetching_metadata" ||
-        record.state === "queued"
-      ) {
+      if (isActiveTaskState(record.state)) {
         record.state = "paused";
         record.updatedAt = Math.floor(Date.now() / 1000);
         await this.store.put(record);
@@ -151,7 +153,8 @@ export class TaskManager {
     const records = await this.store.list();
     return records.map((record) => {
       const runtime = this.runtimes.get(record.id);
-      return runtime ? structuredClone(runtime.view) : recordToView(record);
+      const live = runtime?.view ?? this.unpersistedFailures.get(record.id);
+      return live ? structuredClone(live) : recordToView(record);
     });
   }
 
@@ -232,6 +235,7 @@ export class TaskManager {
       finalUrl: null,
       saveDir: settings.downloadSubdir,
       fileName: isTorrent ? null : name,
+      fileNameExplicit: Boolean(input.fileName?.trim()),
       state: "queued",
       total,
       downloaded: 0,
@@ -267,6 +271,8 @@ export class TaskManager {
   }
 
   async getTaskView(id: number): Promise<TaskView | null> {
+    const failure = this.unpersistedFailures.get(id);
+    if (failure) return structuredClone(failure);
     const runtime = this.runtimes.get(id);
     if (runtime) {
       return structuredClone(runtime.view);
@@ -286,11 +292,7 @@ export class TaskManager {
       if (!record) {
         throw new Error(`任务不存在: ${id}`);
       }
-      if (
-        record.state === "queued" ||
-        record.state === "downloading" ||
-        record.state === "fetching_metadata"
-      ) {
+      if (isActiveTaskState(record.state)) {
         record.state = "paused";
         record.error = null;
         record.updatedAt = Math.floor(Date.now() / 1000);
@@ -320,6 +322,7 @@ export class TaskManager {
     record.error = null;
     record.updatedAt = Math.floor(Date.now() / 1000);
     await this.store.put(record);
+    this.unpersistedFailures.delete(id);
     this.emit({ type: "updated", task: recordToView(record) });
     await this.pump();
     return (await this.getTaskView(id)) ?? recordToView(record);
@@ -336,6 +339,7 @@ export class TaskManager {
     }
 
     await this.store.delete(id);
+    this.unpersistedFailures.delete(id);
 
     // 清理 OPFS 中的临时分片缓存
     await this.partStore.remove(this.httpPartKey(id)).catch(() => {});
@@ -354,15 +358,14 @@ export class TaskManager {
 
   async pauseAll(): Promise<TaskView[]> {
     await this.ensureInitialized();
-    const tasks = await this.listTasks();
-    for (const task of tasks) {
-      if (
-        task.state === "queued" ||
-        task.state === "downloading" ||
-        task.state === "fetching_metadata"
-      ) {
-        await this.pauseTask(task.id).catch(() => {});
+    this.schedulingHolds++;
+    try {
+      const tasks = await this.listTasks();
+      for (const task of tasks) {
+        if (isActiveTaskState(task.state)) await this.pauseTask(task.id);
       }
+    } finally {
+      this.schedulingHolds--;
     }
     return this.listTasks();
   }
@@ -407,7 +410,7 @@ export class TaskManager {
       throw new Error("任务已完成，不可修改文件选择");
     }
     const cleanIndices = Array.from(new Set(fileIndices)).sort((a, b) => a - b);
-    if (cleanIndices.length === 0) {
+    if (cleanIndices.length === 0 || cleanIndices.some(i => !record.btFiles.some(f => f.index === i))) {
       throw new Error("请至少选择一个文件");
     }
 
@@ -417,6 +420,19 @@ export class TaskManager {
     }
 
     const fresh = (await this.store.get(id))!;
+    // A piece spanning an unselected file was only partially saved. Its completion
+    // cannot be reused when that file becomes selected.
+    const added = new Set(cleanIndices.filter(i => !fresh.btFiles.find(f => f.index === i)?.selected));
+    let offset = 0;
+    const invalidate = new Set<number>();
+    for (const file of fresh.btFiles) {
+      if (added.has(file.index) && fresh.btPieceLength > 0 && file.length > 0) {
+        for (let p = Math.floor(offset / fresh.btPieceLength); p <= Math.floor((offset + file.length - 1) / fresh.btPieceLength); p++) invalidate.add(p);
+      }
+      offset += file.length;
+    }
+    fresh.btCompletedPieces = fresh.btCompletedPieces.filter(p => !invalidate.has(p));
+    if (added.size) fresh.btDownloadComplete = false;
     fresh.onlyFiles = cleanIndices;
     const selectedSet = new Set(cleanIndices);
     fresh.btFiles = fresh.btFiles.map((f) => ({
@@ -450,6 +466,7 @@ export class TaskManager {
 
   async pump(): Promise<void> {
     const nextPump = this.pumpChain.catch(() => {}).then(async () => {
+      if (this.schedulingHolds) return;
       const settings = await this.getSettings();
       const maxConcurrent = Math.max(1, settings.maxConcurrentTasks);
 
@@ -458,7 +475,7 @@ export class TaskManager {
         // 按创建时间先后启动排队任务
         const nextQueued = [...records]
           .reverse()
-          .find((r) => r.state === "queued" && !this.runtimes.has(r.id));
+          .find((r) => r.state === "queued" && !this.runtimes.has(r.id) && !this.unpersistedFailures.has(r.id));
         if (!nextQueued) {
           break;
         }
@@ -486,6 +503,7 @@ export class TaskManager {
       view: initialView,
       lastPersistMs: Date.now(),
       btPeers: [],
+      persistence: Promise.resolve(),
     };
     this.runtimes.set(record.id, runtime);
     this.emit({ type: "updated", task: structuredClone(initialView) });
@@ -496,7 +514,8 @@ export class TaskManager {
         : this.executeHttpTask(record, runtime)
     )
       .catch(async (err) => {
-        await this.handleTaskFailureOrAbort(record.id, abort.signal.aborted, err);
+        await this.handleTaskFailureOrAbort(record, runtime.persistenceError === undefined && abort.signal.aborted,
+          runtime.persistenceError ?? err);
       })
       .finally(() => {
         this.runtimes.delete(record.id);
@@ -506,16 +525,33 @@ export class TaskManager {
     runtime.promise = runPromise;
   }
 
+  private persistRuntime(record: TaskRecord, runtime: ActiveRuntime): Promise<void> {
+    const snapshot = structuredClone(record);
+    const next = runtime.persistence.then(async () => {
+      if (runtime.persistenceError !== undefined) throw runtime.persistenceError;
+      await this.store.put(snapshot);
+    });
+    runtime.persistence = next.catch(err => {
+      runtime.persistenceError = err;
+      runtime.abort.abort(err);
+    });
+    return next;
+  }
+
+  private async setRuntimePhase(record: TaskRecord, runtime: ActiveRuntime, state: "verifying" | "exporting"): Promise<void> {
+    record.state = state;
+    runtime.view = recordToView(record);
+    this.emit({ type: "updated", task: structuredClone(runtime.view) });
+    await this.persistRuntime(record, runtime);
+  }
+
   private async executeHttpTask(record: TaskRecord, runtime: ActiveRuntime): Promise<void> {
     const settings = await this.getSettings();
     const partKey = this.httpPartKey(record.id);
 
     const alreadyCompleteInPartStore =
-      record.total !== null &&
-      record.total > 0 &&
-      record.segments.length > 0 &&
-      record.segments.every((s) => s.state === "completed") &&
-      (await this.partStore.exists(partKey));
+      record.httpDownloadComplete === true && record.total !== null &&
+      (await this.partStore.exists(partKey)) && (await this.partStore.size(partKey)) === record.total;
 
     if (!alreadyCompleteInPartStore) {
       await this.hooks.onPrepareHeaders?.({
@@ -539,7 +575,7 @@ export class TaskManager {
           rateLimiter: this.rateLimiter,
           signal: runtime.abort.signal,
           resumeState:
-            record.segments.length > 0
+            record.httpCheckpointVersion === 1 && record.segments.length > 0
               ? {
                   etag: record.etag,
                   lastModified: record.lastModified,
@@ -557,17 +593,20 @@ export class TaskManager {
             if (probe.total !== null) {
               record.total = probe.total;
             }
-            if (!record.fileName && probe.fileName) {
-              record.fileName = probe.fileName;
-              record.name = probe.fileName;
+            if (record.fileNameExplicit === false && probe.fileName) {
+              record.fileName = sanitizeFileName(probe.fileName);
+              record.name = record.fileName;
             }
           },
           onProgress: (prog) => {
-            record.downloaded = prog.downloaded;
+            record.httpCheckpointVersion = 1;
+            record.httpDownloadComplete = false;
+            record.downloaded = prog.committedBytes;
             record.total = prog.total ?? record.total;
             record.rangeSupported = prog.rangeSupported;
-            record.segments = prog.segments;
+            record.segments = prog.committedSegments;
             runtime.view = recordToView(record, {
+              downloaded: prog.downloaded,
               speedBps: prog.speedBps,
               etaSecs: prog.etaSecs,
               segments: prog.segments,
@@ -578,9 +617,10 @@ export class TaskManager {
             if (now - runtime.lastPersistMs >= 1000) {
               runtime.lastPersistMs = now;
               record.updatedAt = Math.floor(now / 1000);
-              void this.store.put(structuredClone(record));
+              void this.persistRuntime(record, runtime).catch(() => {});
             }
           },
+          onPhase: () => { void this.setRuntimePhase(record, runtime, "verifying").catch(() => {}); },
         });
 
         const finalName = record.fileName || result.fileName || record.name;
@@ -590,6 +630,7 @@ export class TaskManager {
         record.downloaded = result.total;
         record.rangeSupported = result.rangeSupported;
         record.segments = result.segments;
+        record.httpDownloadComplete = true;
       } else {
         record.downloaded =
           record.total !== null && record.total > 0 ? record.total : record.downloaded;
@@ -597,10 +638,12 @@ export class TaskManager {
 
       const finalName = record.fileName || record.name;
       record.updatedAt = Math.floor(Date.now() / 1000);
-      await this.store.put(structuredClone(record));
+      await this.persistRuntime(record, runtime);
 
       // 导出到操作系统下载目录
       if (this.hooks.onExportFile) {
+        runtime.abort.signal.throwIfAborted();
+        await this.setRuntimePhase(record, runtime, "exporting");
         const blob = await this.partStore.toBlob(partKey);
         const relPath = record.saveDir
           ? `${record.saveDir}/${finalName}`
@@ -609,6 +652,7 @@ export class TaskManager {
           taskId: record.id,
           blob,
           relativePath: relPath,
+          signal: runtime.abort.signal,
         });
         if (typeof exported === "number" || exported === null) {
           record.chromeDownloadId = exported;
@@ -618,13 +662,13 @@ export class TaskManager {
             record.exportedPath = exported.savedPath;
           }
         }
-        await this.partStore.remove(partKey).catch(() => {});
       }
 
       record.state = "completed";
       record.error = null;
       record.updatedAt = Math.floor(Date.now() / 1000);
-      await this.store.put(structuredClone(record));
+      await this.persistRuntime(record, runtime);
+      if (this.hooks.onExportFile) await this.partStore.remove(partKey).catch(() => {});
 
       const completedView = recordToView(record, {
         speedBps: 0,
@@ -643,11 +687,16 @@ export class TaskManager {
     const settings = await this.getSettings();
     const partPrefix = this.btPartKeyPrefix(record.id);
 
-    const result = await runTorrentDownload({
+    const cachedMeta = record.btDownloadComplete && record.torrentBytesBase64
+      ? await parseTorrentBuffer(base64ToUint8Array(record.torrentBytesBase64)) : null;
+    const result = cachedMeta ? {
+      meta: cachedMeta, selectedFiles: record.btFiles, completedPieces: record.btCompletedPieces,
+      totalSelectedBytes: record.total ?? 0, runtimeDetails: { peers: [] as TorrentPeerInfo[] },
+    } : await runTorrentDownload({
       sourceUrl: record.url,
       torrentBytesBase64: record.torrentBytesBase64,
       onlyFiles: record.onlyFiles,
-      completedPieces: record.btCompletedPieces,
+      completedPieces: record.btCheckpointVersion === 1 ? record.btCompletedPieces : [],
       partKeyPrefix: partPrefix,
       partStore: this.partStore,
       connections: record.connections,
@@ -673,13 +722,15 @@ export class TaskManager {
         record.btTrackers = meta.trackers;
         record.btWebSeeds = meta.webSeeds;
         record.state = "downloading";
-        void this.store.put(structuredClone(record));
+        void this.persistRuntime(record, runtime).catch(() => {});
       },
       onProgress: (prog) => {
         record.state = prog.state;
         record.name = prog.name || record.name;
         record.infoHash = prog.infoHash || record.infoHash;
-        record.downloaded = prog.downloaded;
+        record.btCheckpointVersion = 1;
+        record.btDownloadComplete = false;
+        record.downloaded = prog.committedBytes;
         record.total = prog.total;
         record.btFiles = prog.files;
         record.btCompletedPieces = prog.completedPieces;
@@ -688,6 +739,7 @@ export class TaskManager {
           runtime.btPeers = prog.peerList;
         }
         runtime.view = recordToView(record, {
+          downloaded: prog.downloaded,
           speedBps: prog.speedBps,
           peers: prog.peers,
           etaSecs: prog.etaSecs,
@@ -699,7 +751,7 @@ export class TaskManager {
         if (now - runtime.lastPersistMs >= 1000) {
           runtime.lastPersistMs = now;
           record.updatedAt = Math.floor(now / 1000);
-          void this.store.put(structuredClone(record));
+          void this.persistRuntime(record, runtime).catch(() => {});
         }
       },
     });
@@ -709,15 +761,22 @@ export class TaskManager {
     record.btFiles = result.selectedFiles;
     record.total = result.totalSelectedBytes;
     record.downloaded = result.totalSelectedBytes;
+    record.btDownloadComplete = true;
     record.updatedAt = Math.floor(Date.now() / 1000);
-    await this.store.put(structuredClone(record));
+    await this.persistRuntime(record, runtime);
 
     // 导出选中的 BT 文件到系统下载目录
     if (this.hooks.onExportFile) {
+      await this.setRuntimePhase(record, runtime, "exporting");
+      record.btExports ??= {};
       for (const file of result.selectedFiles) {
-        if (!file.selected) continue;
+        runtime.abort.signal.throwIfAborted();
+        if (!file.selected || record.btExports[file.index]) continue;
         const fileKey = `${partPrefix}-file-${file.index}`;
-        if (await this.partStore.exists(fileKey)) {
+        if (!(await this.partStore.exists(fileKey)) || await this.partStore.size(fileKey) !== file.length) {
+          throw new Error(`下载缓存缺失或长度错误，无法保存: ${file.path}`);
+        }
+        {
           const blob = await this.partStore.toBlob(fileKey);
           const relPath = record.saveDir
             ? result.meta.isMultiFile
@@ -730,7 +789,10 @@ export class TaskManager {
             taskId: record.id,
             blob,
             relativePath: relPath,
+            signal: runtime.abort.signal,
           });
+          record.btExports[file.index] = typeof exported === "number" || exported === null
+            ? { downloadId: exported } : exported;
           if (typeof exported === "number") {
             record.chromeDownloadId = exported;
           } else if (exported && typeof exported === "object") {
@@ -741,7 +803,7 @@ export class TaskManager {
               record.exportedPath = exported.savedPath;
             }
           }
-          await this.partStore.remove(fileKey).catch(() => {});
+          await this.persistRuntime(record, runtime);
         }
       }
     }
@@ -749,7 +811,12 @@ export class TaskManager {
     record.state = "completed";
     record.error = null;
     record.updatedAt = Math.floor(Date.now() / 1000);
-    await this.store.put(structuredClone(record));
+    await this.persistRuntime(record, runtime);
+    if (this.hooks.onExportFile) {
+      for (const file of result.selectedFiles) {
+        if (file.selected) await this.partStore.remove(`${partPrefix}-file-${file.index}`).catch(() => {});
+      }
+    }
 
     const completedView = recordToView(record, {
       speedBps: 0,
@@ -763,21 +830,14 @@ export class TaskManager {
   }
 
   private async handleTaskFailureOrAbort(
-    id: number,
+    record: TaskRecord,
     aborted: boolean,
     err: unknown,
   ): Promise<void> {
-    const record = await this.store.get(id);
-    if (!record) return;
-    const runtime = this.runtimes.get(id);
-    if (runtime) {
-      record.downloaded = runtime.view.downloaded;
-      record.total = runtime.view.total;
-      record.segments = runtime.view.segments;
-    }
+    await this.runtimes.get(record.id)?.persistence;
 
     const isAbortError =
-      aborted || (err instanceof DOMException && err.name === "AbortError");
+      aborted;
 
     if (isAbortError) {
       record.state = "paused";
@@ -787,14 +847,14 @@ export class TaskManager {
       record.error = err instanceof Error ? err.message : String(err);
     }
     record.updatedAt = Math.floor(Date.now() / 1000);
-    await this.store.put(structuredClone(record));
-
     const updatedView = recordToView(record, {
       speedBps: 0,
       peers: 0,
       etaSecs: null,
       segments: record.segments,
     });
+    try { await this.store.put(structuredClone(record)); }
+    catch { this.unpersistedFailures.set(record.id, updatedView); }
     this.emit({ type: "updated", task: updatedView });
     if (record.state === "failed") {
       this.hooks.onNotifyTaskFinished?.(updatedView);

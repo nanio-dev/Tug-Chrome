@@ -2,10 +2,11 @@
 
 interface WorkerRequestMessage {
   id: number;
-  op: "allocate" | "write" | "flush" | "remove";
+  op: "allocate" | "write" | "sync" | "flush" | "remove";
   key: string;
   offset?: number;
   buffer?: ArrayBuffer;
+  reset?: boolean;
 }
 
 let dirPromise: Promise<FileSystemDirectoryHandle> | null = null;
@@ -27,6 +28,9 @@ async function getSyncHandle(key: string): Promise<FileSystemSyncAccessHandle> {
   }
   const dir = await getRootDir();
   const fileHandle = await dir.getFileHandle(key, { create: true });
+  if (typeof fileHandle.createSyncAccessHandle !== "function") {
+    throw new DOMException("SyncAccessHandle unavailable", "NotSupportedError");
+  }
   const syncHandle = await fileHandle.createSyncAccessHandle();
   handles.set(key, syncHandle);
   return syncHandle;
@@ -35,25 +39,24 @@ async function getSyncHandle(key: string): Promise<FileSystemSyncAccessHandle> {
 function closeSyncHandle(key: string): void {
   const syncHandle = handles.get(key);
   if (!syncHandle) return;
-  handles.delete(key);
   try {
     syncHandle.flush();
-  } catch {
-    // 忽略 flush 异常
-  }
-  try {
+  } finally {
+    handles.delete(key);
     syncHandle.close();
-  } catch {
-    // 忽略 close 异常
   }
 }
 
 self.onmessage = async (event: MessageEvent<WorkerRequestMessage>) => {
-  const { id, op, key, offset, buffer } = event.data;
+  const { id, op, key, offset, buffer, reset } = event.data;
   try {
     switch (op) {
       case "allocate": {
-        await getSyncHandle(key);
+        const handle = await getSyncHandle(key);
+        if (reset) {
+          handle.truncate(0);
+          handle.flush();
+        }
         self.postMessage({ id, ok: true });
         break;
       }
@@ -65,9 +68,14 @@ self.onmessage = async (event: MessageEvent<WorkerRequestMessage>) => {
         while (written < view.byteLength) {
           const sub = written === 0 ? view : view.subarray(written);
           const n = syncHandle.write(sub, { at: startOffset + written });
-          if (n <= 0) break;
+          if (n <= 0) throw new Error("OPFS write returned zero bytes");
           written += n;
         }
+        self.postMessage({ id, ok: true });
+        break;
+      }
+      case "sync": {
+        handles.get(key)?.flush();
         self.postMessage({ id, ok: true });
         break;
       }
@@ -81,8 +89,8 @@ self.onmessage = async (event: MessageEvent<WorkerRequestMessage>) => {
         try {
           const dir = await getRootDir();
           await dir.removeEntry(key);
-        } catch {
-          // 忽略文件不存在
+        } catch (err) {
+          if (!(err instanceof DOMException && err.name === "NotFoundError")) throw err;
         }
         self.postMessage({ id, ok: true });
         break;
@@ -95,6 +103,7 @@ self.onmessage = async (event: MessageEvent<WorkerRequestMessage>) => {
       id,
       ok: false,
       error: err instanceof Error ? err.message : String(err),
+      unsupported: err instanceof DOMException && err.name === "NotSupportedError",
     });
   }
 };

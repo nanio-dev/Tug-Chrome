@@ -19,12 +19,10 @@ use crate::state::{AppState, ManagedSessionEntry, now_secs, rand_u32};
 
 pub fn cors_headers() -> HeaderMap {
     let mut headers = HeaderMap::new();
-    headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, HeaderValue::from_static("*"));
     headers.insert(
         header::ACCESS_CONTROL_ALLOW_METHODS,
         HeaderValue::from_static("GET, POST, OPTIONS"),
     );
-    headers.insert(header::ACCESS_CONTROL_ALLOW_HEADERS, HeaderValue::from_static("*"));
     headers.insert(
         header::ACCESS_CONTROL_EXPOSE_HEADERS,
         HeaderValue::from_static("Content-Range, Content-Length, Accept-Ranges"),
@@ -124,6 +122,10 @@ pub async fn handle_health(State(state): State<Arc<AppState>>) -> Response {
         "hostName": HOST_NAME,
         "port": state.bound_port,
         "activeSessions": count,
+        "protocolVersion": crate::auth::PROTOCOL_VERSION,
+        "authRequired": true,
+        "btInitialized": state.bt_session.get().is_some(),
+        "capabilities": ["torrent", "file_export", "file_operations"],
     });
     with_cors(Json(body).into_response())
 }
@@ -134,8 +136,8 @@ pub async fn handle_register(
 ) -> Response {
     state.touch();
     let ext_id = payload.ext_id.trim();
-    if ext_id.is_empty() {
-        return json_error(StatusCode::BAD_REQUEST, "extId 不能为空");
+    if !crate::auth::valid_extension_id(ext_id) {
+        return json_error(StatusCode::BAD_REQUEST, "Invalid extension ID");
     }
     match install_and_register(Some(ext_id), false) {
         Ok(manifest_path) => {
@@ -167,7 +169,8 @@ fn prepare_magnet_with_trackers(url: &str, extra_trackers: &[String]) -> String 
             || trimmed.starts_with("http://")
             || trimmed.starts_with("https://")
         {
-            let encoded: String = url::form_urlencoded::byte_serialize(trimmed.as_bytes()).collect();
+            let encoded: String =
+                url::form_urlencoded::byte_serialize(trimmed.as_bytes()).collect();
             out.push_str("&tr=");
             out.push_str(&encoded);
         }
@@ -179,7 +182,7 @@ pub async fn handle_start_session(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<StartSessionPayload>,
 ) -> Response {
-    state.touch();
+    let _operation = state.begin_operation();
 
     let extra_trackers = payload.trackers.unwrap_or_default();
     let prepared_url: String;
@@ -208,7 +211,10 @@ pub async fn handle_start_session(
         match AddTorrent::from_cli_argument(&prepared_url) {
             Ok(src) => src,
             Err(err) => {
-                return json_error(StatusCode::BAD_REQUEST, format!("无效的种子/磁力来源: {err}"));
+                return json_error(
+                    StatusCode::BAD_REQUEST,
+                    format!("无效的种子/磁力来源: {err}"),
+                );
             }
         }
     } else {
@@ -243,9 +249,16 @@ pub async fn handle_start_session(
         ..Default::default()
     };
 
+    let bt_session = match tokio::time::timeout(Duration::from_secs(15), state.bt_session()).await {
+        Ok(Ok(session)) => session,
+        Ok(Err(err)) => {
+            return json_error(StatusCode::BAD_GATEWAY, format!("BT 初始化失败: {err:#}"));
+        }
+        Err(_) => return json_error(StatusCode::GATEWAY_TIMEOUT, "BT 初始化超时"),
+    };
     let add_resp = match tokio::time::timeout(
         Duration::from_secs(55),
-        state.bt_session.add_torrent(add_source, Some(add_opts)),
+        bt_session.add_torrent(add_source, Some(add_opts)),
     )
     .await
     {
@@ -270,7 +283,10 @@ pub async fn handle_start_session(
         AddTorrentResponse::Added(id, h) | AddTorrentResponse::AlreadyManaged(id, h) => (id, h),
         AddTorrentResponse::ListOnly(_) => {
             let _ = std::fs::remove_dir_all(&stage_subdir);
-            return json_error(StatusCode::INTERNAL_SERVER_ERROR, "Unexpected list-only mode");
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Unexpected list-only mode",
+            );
         }
     };
 
@@ -319,10 +335,7 @@ pub async fn handle_session_peers(
 
     let stats = handle.stats();
     let (download_speed_bytes, upload_speed_bytes) = stats.live.as_ref().map_or((0, 0), |live| {
-        (
-            live.download_speed.as_bytes(),
-            live.upload_speed.as_bytes(),
-        )
+        (live.download_speed.as_bytes(), live.upload_speed.as_bytes())
     });
 
     let mut peers = handle
@@ -342,7 +355,7 @@ pub async fn handle_session_peers(
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    peers.sort_by(|a, b| b.downloaded_bytes.cmp(&a.downloaded_bytes));
+    peers.sort_by_key(|p| std::cmp::Reverse(p.downloaded_bytes));
 
     let trackers = handle
         .shared()
@@ -386,10 +399,9 @@ pub async fn handle_stop_session(
 ) -> Response {
     state.touch();
     let removed = state.entries.write().await.remove(&id);
-    let _ = state
-        .bt_session
-        .delete(TorrentIdOrHash::Id(id), true)
-        .await;
+    if let Some(session) = state.bt_session.get() {
+        let _ = session.delete(TorrentIdOrHash::Id(id), true).await;
+    }
     if let Some(entry) = removed {
         let _ = std::fs::remove_dir_all(&entry.stage_dir);
     }
@@ -405,11 +417,14 @@ pub async fn handle_uninstall(State(state): State<Arc<AppState>>) -> Response {
         let mut entries = state.entries.write().await;
         let ids: Vec<usize> = entries.keys().copied().collect();
         for id in ids {
-            let _ = state.bt_session.delete(TorrentIdOrHash::Id(id), true).await;
+            if let Some(session) = state.bt_session.get() {
+                let _ = session.delete(TorrentIdOrHash::Id(id), true).await;
+            }
             entries.remove(&id);
         }
     }
     uninstall_self();
+    crate::auth::remove_token();
     tokio::spawn(async {
         tokio::time::sleep(Duration::from_millis(250)).await;
         std::process::exit(0);

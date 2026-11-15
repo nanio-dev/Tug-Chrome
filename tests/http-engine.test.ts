@@ -2,10 +2,9 @@ import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
 import { after, before, describe, it } from "node:test";
 import {
-  buildInitialSegments,
+  buildRangeQueue,
   computeSha256Hex,
   runHttpDownload,
-  stealSegmentWork,
 } from "../src/engine/http/downloader.ts";
 import { MemoryPartStorage } from "../src/engine/storage/part-store.ts";
 
@@ -78,25 +77,17 @@ describe("HTTP Multi-Connection Segmented Engine", () => {
     server.close();
   });
 
-  it("splits initial segments and steals work from largest active segment", () => {
-    const segs = buildInitialSegments(10 * 1024 * 1024, 4);
-    assert.equal(segs.length, 4);
-    assert.equal(segs[0].start, 0);
-    assert.equal(segs[3].end, 10 * 1024 * 1024);
-
-    segs[0].state = "completed";
-    segs[0].current = segs[0].end;
-    segs[1].state = "downloading";
-    segs[1].current = segs[1].start + 128 * 1024;
-    segs[2].state = "completed";
-    segs[2].current = segs[2].end;
-    segs[3].state = "completed";
-    segs[3].current = segs[3].end;
-
-    const stolen = stealSegmentWork(segs, 256 * 1024);
-    assert.ok(stolen, "should steal second half of segment #1");
-    assert.equal(segs.length, 5);
-    assert.equal(segs[1].end, stolen.start);
+  it("plans bounded, non-overlapping jobs covering small and large files", () => {
+    for (const total of [13, 512 * 1024, 512 * 1024 * 1024, 1024 ** 4]) {
+      const segments = buildRangeQueue(total, 6);
+      assert.equal(segments[0].start, 0);
+      assert.equal(segments.at(-1)!.end, total);
+      assert.ok(segments.length <= 4096);
+      for (let i = 0; i < segments.length; i++) {
+        assert.ok(segments[i].end > segments[i].start);
+        if (i > 0) assert.equal(segments[i - 1].end, segments[i].start);
+      }
+    }
   });
 
   it("downloads with 8 concurrent Range connections, decodes RFC5987 filename, and verifies SHA-256", async () => {

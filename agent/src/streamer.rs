@@ -36,7 +36,13 @@ pub fn resolve_file_id_from_tail(handle: &Arc<ManagedTorrent>, tail: &str) -> us
         .filter(|s| !s.is_empty())
         .map(|seg| {
             url::form_urlencoded::parse(seg.as_bytes())
-                .map(|(k, v)| if v.is_empty() { k.into_owned() } else { format!("{k}={v}") })
+                .map(|(k, v)| {
+                    if v.is_empty() {
+                        k.into_owned()
+                    } else {
+                        format!("{k}={v}")
+                    }
+                })
                 .next()
                 .unwrap_or_else(|| seg.to_owned())
         })
