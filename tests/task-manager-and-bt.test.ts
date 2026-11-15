@@ -123,6 +123,7 @@ describe("TaskManager & BitTorrent/Magnet WebSeed Hybrid Engine", () => {
     }
 
     assert.equal(finalView.state, "completed", `error: ${finalView.error}`);
+    assert.equal(finalView.selectedFileCount, 1);
     assert.equal(exportedFiles.length, 1);
     assert.equal(exportedFiles[0].path, "tug-bundle/beta.txt");
     assert.equal(exportedFiles[0].size, fileB.byteLength);
@@ -156,6 +157,7 @@ describe("TaskManager & BitTorrent/Magnet WebSeed Hybrid Engine", () => {
     }
 
     assert.equal(finalView.state, "completed", `error: ${finalView.error}`);
+    assert.equal(finalView.selectedFileCount, 2);
     assert.equal(exportedFiles.length, 2);
   });
 

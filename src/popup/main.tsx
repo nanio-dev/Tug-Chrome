@@ -45,6 +45,7 @@ import "../shared/styles.css";
 import {
   DEFAULT_SETTINGS,
   isActiveTaskState,
+  canOpenTaskFile,
   type Settings,
   type TaskView,
 } from "../shared/types";
@@ -332,8 +333,8 @@ function PopupInner({
                       {active ? <PauseIcon /> : <PlayIcon />}
                     </button>
                   ) : (<>
-                    <button type="button" className="icon-btn" title={t("task.open")} aria-label={t("task.open")}
-                      onClick={() => void runAction(() => openTaskFile(task))}><ExternalIcon /></button>
+                    {canOpenTaskFile(task) && <button type="button" className="icon-btn" title={t("task.open")} aria-label={t("task.open")}
+                      onClick={() => void runAction(() => openTaskFile(task))}><ExternalIcon /></button>}
                     <button type="button" className="icon-btn" title={t("task.openFolder")} aria-label={t("task.openFolder")}
                       onClick={() => void runAction(() => revealTaskFile(task))}><FolderIcon /></button>
                   </>)}

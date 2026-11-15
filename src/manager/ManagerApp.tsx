@@ -39,6 +39,7 @@ import { I18nProvider, useI18n } from "../shared/i18n";
 import {
   DEFAULT_SETTINGS,
   isActiveTaskState,
+  canOpenTaskFile,
   type AddTaskInput,
   type AppInfo,
   type Settings,
@@ -305,6 +306,7 @@ function ManagerInner({
 
           {done && (
             <>
+              {canOpenTaskFile(task) && (
               <button
                 type="button"
                 className="icon-btn"
@@ -317,6 +319,7 @@ function ManagerInner({
               >
                 <ExternalIcon />
               </button>
+              )}
               <button
                 type="button"
                 className="icon-btn"

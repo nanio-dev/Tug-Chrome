@@ -1,3 +1,4 @@
+import { canOpenTaskFile } from "./types";
 import {
   createRequestId,
   type AgentInstallState,
@@ -96,6 +97,7 @@ export function updateSettings(settings: Partial<Settings>): Promise<Settings> {
 }
 
 export async function openTaskFile(taskOrId: TaskView | number): Promise<{ opened: boolean }> {
+  if (typeof taskOrId === "object" && !canOpenTaskFile(taskOrId)) return { opened: false };
   const id = typeof taskOrId === "number" ? taskOrId : taskOrId.id;
   const chromeDownloadId = typeof taskOrId === "object" ? taskOrId.chromeDownloadId : null;
 

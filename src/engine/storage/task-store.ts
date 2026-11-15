@@ -63,13 +63,16 @@ export function recordToView(
     segments?: SegmentView[];
   },
 ): TaskView {
+  const selectedFiles = record.btFiles.filter(file => file.selected);
+  const singleExport = record.kind === "torrent" && selectedFiles.length === 1 ? record.btExports?.[selectedFiles[0].index] : undefined;
   const displayFile = record.fileName || record.name;
   const path =
-    record.exportedPath ||
+    singleExport?.savedPath || record.exportedPath ||
     (record.saveDir ? `${record.saveDir}/${displayFile}` : displayFile);
   return {
     id: record.id,
     kind: record.kind,
+    selectedFileCount: record.kind === "http" ? 1 : record.btFiles.length ? selectedFiles.length : record.onlyFiles?.length ? new Set(record.onlyFiles).size : null,
     name: record.name,
     url: record.url,
     state: record.state,
@@ -88,7 +91,7 @@ export function recordToView(
     connections: record.connections,
     rangeSupported: record.rangeSupported,
     segments: live?.segments ?? record.segments,
-    chromeDownloadId: record.chromeDownloadId,
+    chromeDownloadId: singleExport ? singleExport.downloadId : record.chromeDownloadId,
     referrer: record.referrer,
     infoHash: record.infoHash,
   };

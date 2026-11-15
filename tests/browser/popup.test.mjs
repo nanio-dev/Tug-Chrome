@@ -57,3 +57,12 @@ it('does not restore stale Agent dialogs in browser mode or after a late install
  await p.close();
  }
 });
+it('shows Open File only for HTTP and single-selected-file torrents in both interfaces',async()=>{
+ const fixture=[['http',1],['torrent',2],['torrent',1],['torrent',null]].map(([kind,selectedFileCount],i)=>({...tasks[3],id:i+1,kind,selectedFileCount,state:'completed',name:'completed-file-'+i+'.zip'}));
+ for(const surface of ['popup','manager']){
+ const p=await h.context.newPage();await p.addInitScript(({settings,tasks})=>{chrome.runtime.sendMessage=async m=>({ok:true,data:m.type==='get_state_snapshot'?{settings:{...settings,standaloneMode:true,locale:'en-US'},tasks,info:{name:'Tug Web',version:'1',platform:'test',storageEngine:'opfs',downloadSubdir:'',activeTasks:0}}:{phase:'idle'}});},{settings:defaults,tasks:fixture});
+ await p.goto(h.origin+'/'+surface+'.html');if(surface==='manager')await p.locator('.nav-item').filter({hasText:'All Tasks'}).click();const rows=p.locator(surface==='popup'?'.popup-task':'.task-item');await rows.first().waitFor();assert.equal(await rows.count(),4);
+ for(let i=0;i<4;i++){assert.equal(await rows.filter({hasText:'completed-file-'+i+'.zip'}).getByRole('button',{name:'Open File',exact:true}).count(),i===0||i===2?1:0);assert.equal(await rows.filter({hasText:'completed-file-'+i+'.zip'}).getByRole('button',{name:'Show in Folder',exact:true}).count(),1);}
+ await p.close();
+ }
+});

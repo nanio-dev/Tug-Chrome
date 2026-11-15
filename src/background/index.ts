@@ -29,6 +29,7 @@ import { parseTorrentBuffer, uint8ArrayToBase64 } from "../engine/torrent/parser
 import {
   DEFAULT_SETTINGS,
   isActiveTaskState,
+  canOpenTaskFile,
   normalizeSettings,
   type AddTaskInput,
   type Settings,
@@ -958,6 +959,7 @@ async function handleBackgroundCommand(req: ExtensionRequest): Promise<unknown> 
       const { id } = req.payload as { id: number };
       const tasks = await forwardToOffscreen<TaskView[]>("list_tasks");
       const task = tasks.find((t) => t.id === id);
+      if (task && !canOpenTaskFile(task)) throw new Error("多文件种子任务请使用打开文件夹");
       const browserDownloadId = task ? await findBrowserDownloadIdForTask(task) : null;
 
       if (

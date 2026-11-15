@@ -27,6 +27,8 @@ export interface SegmentView {
 export interface TaskView {
   id: number;
   kind: TaskKind;
+  /** Number of selected output files; null/undefined means torrent metadata is unknown. */
+  selectedFileCount?: number | null;
   name: string;
   url: string;
   state: TaskState;
@@ -48,6 +50,10 @@ export interface TaskView {
   chromeDownloadId: number | null;
   referrer: string | null;
   infoHash: string | null;
+}
+
+export function canOpenTaskFile(task: Pick<TaskView, "kind" | "selectedFileCount">): boolean {
+  return task.kind === "http" || task.selectedFileCount === 1;
 }
 
 export interface Settings {
