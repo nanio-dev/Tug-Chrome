@@ -57,7 +57,7 @@ export function canOpenTaskFile(task: Pick<TaskView, "kind" | "selectedFileCount
 }
 
 export interface Settings {
-  /** 子目录名（相对于系统默认下载目录，例如 "Tug"，留空直接存根目录） */
+  /** 子目录名（纯插件模式相对于浏览器下载目录，Agent 模式相对于系统下载目录，例如 "Tug"，留空直接存根目录） */
   downloadSubdir: string;
   /** 单任务连接数 (1–32) */
   connectionsPerTask: number;

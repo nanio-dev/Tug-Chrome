@@ -119,7 +119,7 @@ export const enUS: Messages = {
   "settings.tab.appearance": "Appearance & Language",
   "settings.tab.about": "About & Diagnostics",
   "settings.downloadSubdir": "Download Subdirectory",
-  "settings.downloadSubdirHint": "Relative to your browser Downloads folder (leave blank to save directly in Downloads).",
+  "settings.downloadSubdirHint": "Relative to browser Downloads in standalone mode, or system Downloads in Agent mode. Leave blank to use the root folder.",
   "settings.connections": "Default Connections per Task (1–32)",
   "settings.concurrent": "Max Concurrent Tasks (1–16)",
   "settings.globalLimit": "Global Speed Limit (KiB/s)",

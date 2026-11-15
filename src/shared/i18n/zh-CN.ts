@@ -117,7 +117,7 @@ export const zhCN = {
   "settings.tab.appearance": "外观与语言",
   "settings.tab.about": "关于与诊断",
   "settings.downloadSubdir": "下载保存子目录",
-  "settings.downloadSubdirHint": "相对于浏览器默认下载目录（留空则直接保存在下载目录，与浏览器习惯一致）。",
+  "settings.downloadSubdirHint": "纯插件模式相对于浏览器下载目录；Agent 模式相对于系统下载目录。留空则直接保存在根目录。",
   "settings.connections": "单任务默认连接数 (1–32)",
   "settings.concurrent": "最大同时下载任务数 (1–16)",
   "settings.globalLimit": "全局下载限速 (KiB/s)",

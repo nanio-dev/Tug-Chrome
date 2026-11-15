@@ -36,8 +36,39 @@ pub struct DeleteFilePayload {
     pub path: String,
 }
 
+#[cfg(windows)]
+fn windows_downloads_dir() -> Option<PathBuf> {
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::System::Com::CoTaskMemFree;
+    use windows_sys::Win32::UI::Shell::{FOLDERID_Downloads, SHGetKnownFolderPath};
+    let mut raw = std::ptr::null_mut();
+    // Standard Windows API follows a user's relocated Downloads known folder.
+    unsafe {
+        if SHGetKnownFolderPath(&FOLDERID_Downloads, 0, std::ptr::null_mut(), &mut raw) < 0
+            || raw.is_null()
+        {
+            return None;
+        }
+        let mut length = 0;
+        while *raw.add(length) != 0 {
+            length += 1;
+        }
+        let path = PathBuf::from(std::ffi::OsString::from_wide(std::slice::from_raw_parts(
+            raw, length,
+        )));
+        CoTaskMemFree(raw.cast());
+        path.is_absolute().then_some(path)
+    }
+}
+
 /// 获取当前用户的系统 `Downloads` 下载目录。
 pub fn resolve_downloads_dir() -> PathBuf {
+    #[cfg(windows)]
+    if !std::env::args().any(|a| a == "--serve-only" || a == "--isolated-install")
+        && let Some(path) = windows_downloads_dir()
+    {
+        return path;
+    }
     if let Some(profile) = std::env::var_os("USERPROFILE") {
         let dl = PathBuf::from(profile).join("Downloads");
         return dl;
