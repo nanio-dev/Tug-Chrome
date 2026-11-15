@@ -22,7 +22,7 @@ it("refuses an older unauthenticated Agent and clears stale credentials", async 
   await setHelperCredentials("ab".repeat(32));
   globalThis.fetch = (async () => new Response(null, { status: 401 })) as typeof fetch;
   await checkHelperHealth();
-  await assert.rejects(helperRequestHeaders(NATIVE_HELPER_BASE_URL), /Native Messaging/);
+  await assert.rejects(helperRequestHeaders(NATIVE_HELPER_BASE_URL), /Agent 自动连接失败/);
 });
 it("authenticates session/export calls and disallows redirects carrying capabilities", async () => {
   const token = "cd".repeat(32);
@@ -84,4 +84,13 @@ it("preserves export failures and cancellation rather than silently exporting an
   const controller = new AbortController();controller.abort(new Error("user paused"));
   globalThis.fetch = (async () => {throw new Error("aborted");}) as typeof fetch;
   await assert.rejects(exportBlobViaHelper(new Blob(["data"]),"file.bin",controller.signal),/user paused/);
+});
+it("retrieves Offscreen credentials silently and refreshes a rejected token once", async () => {
+  let requests=0, posts=0;
+  globalThis.chrome={runtime:{sendMessage:async(message: {type:string})=>{assert.equal(message.type,"get_agent_credentials");return {ok:true,data:{token:(++requests===1?"ab":"cd").repeat(32)}};}}} as unknown as typeof chrome;
+  globalThis.fetch=(async (_url,init)=>{
+    posts++;assert.equal(new Headers(init?.headers).get("X-Tug-Agent-Token"),(posts===1?"ab":"cd").repeat(32));
+    return posts===1?new Response(null,{status:401}):Response.json({ok:true,savedPath:"Downloads/recovered.bin"});
+  }) as typeof fetch;
+  assert.equal(await exportBlobViaHelper(new Blob(["payload"]),"recovered.bin"),"Downloads/recovered.bin");assert.equal(posts,2);assert.equal(requests,2);
 });

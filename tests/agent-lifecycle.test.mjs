@@ -31,3 +31,10 @@ it('keeps an active slow export alive and exits after the operation becomes idle
  await Promise.race([exited,new Promise((_,reject)=>{const t=setTimeout(()=>reject(Error('Agent did not exit after export')),5000);t.unref();})]);
  }finally{if(child.exitCode===null)child.kill();await cleanup(f);}
 });
+it('uninstalls its running AppData image and confirms directory and temporary image removal',{timeout:15000,skip:process.platform!=='win32'},async()=>{
+ const f=await fixture(),dir=path.join(f.env.LOCALAPPDATA,'TugAgent');await fs.mkdir(dir);const target=path.join(dir,'tug-agent.exe');await fs.copyFile(exe,target);
+ const child=spawn(target,['--serve-only','--native-stdio','--port=0'],{env:f.env,windowsHide:true});const exited=once(child,'exit');
+ try{const info=await ready(child);const response=await fetch(info.baseUrl+'/uninstall',{method:'POST',headers:{'X-Tug-Agent-Token':info.token}});assert.equal(response.status,200,await response.clone().text());assert.equal((await response.json()).ok,true);assert.equal(await fs.stat(dir).then(()=>true,()=>false),false,'Must remove AppData before reporting success');await exited;
+ const trash=path.join(f.env.LOCALAPPDATA,'.TugAgent-remove-'+child.pid);for(let i=0;i<60;i++){if(!await fs.stat(trash).then(()=>true,()=>false))break;await new Promise(r=>setTimeout(r,100));}assert.equal(await fs.stat(trash).then(()=>true,()=>false),false,'Temporary executable must be removed too');
+ }finally{if(child.exitCode===null)child.kill();await cleanup(f);}
+});

@@ -156,6 +156,7 @@ async fn run() -> anyhow::Result<()> {
         entries: RwLock::new(HashMap::new()),
         last_activity_secs: AtomicU64::new(now_secs()),
         native_stdin_active: AtomicBool::new(false),
+        shutting_down: AtomicBool::new(false),
         active_operations: AtomicU64::new(0),
         bound_port,
     });

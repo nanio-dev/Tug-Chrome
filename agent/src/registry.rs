@@ -512,50 +512,94 @@ fn stop_old_agents() -> anyhow::Result<()> {
 }
 
 /// 彻底卸载 Tug Agent：清理注册表、清单文件、临时目录，并在退出后删除常驻目录中的自身文件。
-pub fn uninstall_self() {
-    #[cfg(target_os = "windows")]
+pub fn uninstall_self() -> anyhow::Result<()> {
+    #[cfg(windows)]
     {
-        for proto in [PROTOCOL_SCHEME, "tug-web"] {
-            let key = format!(r"HKCU\Software\Classes\{proto}");
-            let _ = run_reg_silent(&["delete", &key, "/f"]);
-        }
-
-        for target in BROWSER_TARGETS {
-            for host in [HOST_NAME, LEGACY_HOST_NAME] {
-                let key = format!(r"{}\{host}", target.nm_subkey);
-                let _ = run_reg_silent(&["delete", &key, "/f"]);
+        let app_dir =
+            resolve_persistent_agent_dir().ok_or_else(|| anyhow!("Missing LOCALAPPDATA"))?;
+        if app_dir.exists() {
+            use std::os::windows::fs::MetadataExt;
+            anyhow::ensure!(
+                std::fs::symlink_metadata(&app_dir)?.file_attributes() & 0x400 == 0,
+                "Refusing to uninstall a redirected Agent directory"
+            );
+            let parent = std::fs::canonicalize(app_dir.parent().unwrap())?;
+            anyhow::ensure!(
+                std::fs::canonicalize(&app_dir)?
+                    .to_string_lossy()
+                    .eq_ignore_ascii_case(&parent.join("TugAgent").to_string_lossy()),
+                "Unexpected Agent directory"
+            );
+            let exe = std::env::current_exe()?;
+            let moved = if exe.parent().is_some_and(|p| {
+                p.to_string_lossy()
+                    .eq_ignore_ascii_case(&app_dir.to_string_lossy())
+            }) {
+                let trash = app_dir
+                    .parent()
+                    .unwrap()
+                    .join(format!(".TugAgent-remove-{}", std::process::id()));
+                std::fs::create_dir_all(&trash)?;
+                let moved_exe = trash.join("tug-agent.exe");
+                std::fs::rename(&exe, &moved_exe).context("无法移出正在运行的 Agent 文件")?;
+                let script = r#"
+$agentOwnerPid = [int]$env:TUG_REMOVE_PID
+$agentTrash = [IO.Path]::GetFullPath($env:TUG_REMOVE_ROOT)
+$agentExpected = [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA ('.TugAgent-remove-' + $agentOwnerPid)))
+if ($agentTrash -ne $agentExpected) { exit 1 }
+Wait-Process -Id $agentOwnerPid -Timeout 20 -ErrorAction SilentlyContinue
+for ($agentAttempt = 0; $agentAttempt -lt 40; $agentAttempt++) {
+  Remove-Item -LiteralPath (Join-Path $agentTrash 'tug-agent.exe') -Force -ErrorAction SilentlyContinue
+  if (-not (Test-Path -LiteralPath (Join-Path $agentTrash 'tug-agent.exe'))) { break }
+  Start-Sleep -Milliseconds 250
+}
+Remove-Item -LiteralPath $agentTrash -ErrorAction SilentlyContinue
+"#;
+                let mut cleanup = Command::new("powershell.exe");
+                cleanup.args(["-NoProfile", "-NonInteractive", "-Command", script]);
+                cleanup
+                    .env("TUG_REMOVE_PID", std::process::id().to_string())
+                    .env("TUG_REMOVE_ROOT", &trash);
+                // The cleanup must survive termination of a browser-owned native host.
+                cleanup.creation_flags(CREATE_NO_WINDOW | 0x01000000);
+                if let Err(err) = cleanup.spawn() {
+                    let _ = std::fs::rename(&moved_exe, &exe);
+                    return Err(err).context("无法启动 Agent 清理程序");
+                }
+                Some((moved_exe, exe))
+            } else {
+                None
+            };
+            if let Err(err) = std::fs::remove_dir_all(&app_dir) {
+                if let Some((moved_exe, original)) = moved {
+                    let _ = std::fs::create_dir_all(&app_dir);
+                    let _ = std::fs::rename(moved_exe, original);
+                }
+                return Err(err).context("Agent 常驻目录清理失败");
             }
+            anyhow::ensure!(!app_dir.exists(), "Agent directory still exists");
         }
-
-        if let Ok(exe_path) = std::env::current_exe()
-            && let Some(dir) = exe_path.parent()
-        {
-            let _ = std::fs::remove_file(dir.join(format!("{HOST_NAME}.json")));
-            let _ = std::fs::remove_file(dir.join(format!("{LEGACY_HOST_NAME}.json")));
-        }
-
-        if let Some(app_dir) = resolve_persistent_agent_dir() {
-            let _ = std::fs::remove_file(app_dir.join(format!("{HOST_NAME}.json")));
-        }
-
-        let _ = std::fs::remove_dir_all(std::env::temp_dir().join("tug-agent-stage"));
-
-        if let (Ok(exe_path), Some(app_dir)) =
-            (std::env::current_exe(), resolve_persistent_agent_dir())
-        {
-            let exe_lower = exe_path.to_string_lossy().to_ascii_lowercase();
-            let dir_lower = app_dir.to_string_lossy().to_ascii_lowercase();
-            if exe_lower.starts_with(&dir_lower) {
-                let cmd_line = format!(
-                    "ping -n 3 127.0.0.1 >nul & del /f /q \"{}\" & rmdir /s /q \"{}\"",
-                    exe_path.to_string_lossy(),
-                    app_dir.to_string_lossy()
+        // Tests exercise actual executable deletion without touching user registry entries.
+        if !std::env::args().any(|a| a == "--serve-only" || a == "--isolated-install") {
+            for proto in [PROTOCOL_SCHEME, "tug-web"] {
+                let key = format!(r"HKCU\Software\Classes\{proto}");
+                let _ = run_reg_silent(&["delete", &key, "/f"]);
+                anyhow::ensure!(
+                    !crate::windows_registry::exists(&key),
+                    "Protocol registry cleanup failed: {key}"
                 );
-                let mut cmd = Command::new("cmd");
-                cmd.args(["/c", &cmd_line]);
-                cmd.creation_flags(CREATE_NO_WINDOW);
-                let _ = cmd.spawn();
+            }
+            for target in BROWSER_TARGETS {
+                for host in [HOST_NAME, LEGACY_HOST_NAME] {
+                    let key = format!(r"{}\{host}", target.nm_subkey);
+                    let _ = run_reg_silent(&["delete", &key, "/f"]);
+                    anyhow::ensure!(
+                        !crate::windows_registry::exists(&key),
+                        "Native host registry cleanup failed: {key}"
+                    );
+                }
             }
         }
     }
+    Ok(())
 }

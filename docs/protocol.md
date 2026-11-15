@@ -63,3 +63,5 @@ Native Messaging 帧仍为 4 字节小端长度 + JSON。ready/pong 帧额外携
 ## 注册与生命周期更新
 
 /register 为开放注册入口，不要求能力凭据，允许合法扩展来源和无 Origin 的本机调用，拒绝普通网页来源；控制接口继续鉴权。注册后通过 Native Messaging 取得凭据，正常连接不依赖自定义协议页面。手动启动时替换旧实例并迁移到 AppData，普通握手不重启已有实例。健康查询与 Native Messaging 连接不阻止无任务空闲 120 秒退出。
+
+Offscreen 文档不依赖 chrome.storage/nativeMessaging，使用 get_agent_credentials 私有 runtime RPC 获取后台已自动连接的凭据。该命令仅允许同扩展的 offscreen.html 调用，普通页面与内容脚本被拒绝；能力凭据仍不通过 HTTP 返回。卸载 API 只在常驻目录实际清理并完成注册表清理后返回 ok，错误以非成功 HTTP 状态返回。

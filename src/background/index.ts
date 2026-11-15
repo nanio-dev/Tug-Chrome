@@ -16,6 +16,8 @@ import {
 } from "../shared/protocol";
 import {
   checkHelperHealth,
+  readHelperCredentials,
+  setHelperCredentials,
   deleteFileViaHelper,
   connectHelperNative,
   disconnectHelperNative,
@@ -387,6 +389,7 @@ async function openManagerTab(initialUrl?: string): Promise<void> {
 }
 
 let extIdRegisteredInSession = false;
+let agentUninstalling = false;
 
 async function ensureExtIdRegisteredOnce(): Promise<void> {
   if (extIdRegisteredInSession) return;
@@ -435,9 +438,11 @@ async function activateNativeHelperViaProtocol(protocolTabId?: number): Promise<
 
 async function ensureNativeHelperRunning(options?: {
   allowProtocolFallback?: boolean;
+  management?: boolean;
 }): Promise<NativeHelperStatus> {
   await loadCachedSettings();
-  if (cachedSettings.standaloneMode) {
+  if (agentUninstalling) return { available: false };
+  if (cachedSettings.standaloneMode && !options?.management) {
     return { available: false, standaloneMode: true };
   }
 
@@ -817,6 +822,11 @@ async function handleBackgroundCommand(req: ExtensionRequest): Promise<unknown> 
   await loadAgentInstallState();
 
   switch (req.type) {
+    case "get_agent_credentials": {
+      const status = await ensureNativeHelperRunning({ allowProtocolFallback: false });
+      if (!status.available) throw new Error("Agent 自动连接失败，下载缓存已保留，可重试保存");
+      return { token: await readHelperCredentials() };
+    }
     case "get_native_helper_status": {
       if (cachedSettings.standaloneMode) {
         return { available: false, standaloneMode: true };
@@ -880,19 +890,25 @@ async function handleBackgroundCommand(req: ExtensionRequest): Promise<unknown> 
     case "uninstall_native_agent": {
       let status = await checkHelperHealth(500);
       if (!status.available) {
-        status = await ensureNativeHelperRunning({ allowProtocolFallback: false });
+        status = await ensureNativeHelperRunning({ allowProtocolFallback: false, management: true });
       }
       if (!status.available) {
         return { uninstalled: false };
       }
-      const ok = await uninstallViaHelper();
-      if (ok) disconnectHelperNative();
-      logDiag("uninstall", `uninstallViaHelper result=${ok}`);
-      extIdRegisteredInSession = false;
-      setAgentReadyBadge(false);
-      await new Promise((r) => setTimeout(r, 400));
-      return { uninstalled: ok };
+      agentUninstalling = true;
+      try {
+        const ok = await uninstallViaHelper();
+        if (!ok) throw new Error("Agent 未确认卸载完成");
+        disconnectHelperNative();
+        await setHelperCredentials(null);
+        cachedSettings = await forwardToOffscreen<Settings>("update_settings", { standaloneMode: true });
+        extIdRegisteredInSession = false;
+        setAgentReadyBadge(false);
+        logDiag("uninstall", "Agent directory removed and host registrations cleared");
+        return { uninstalled: true };
+      } finally { agentUninstalling = false; }
     }
+
     case "get_diagnostic_logs":
       return getDiagnosticLogsList();
     case "clear_diagnostic_logs":
@@ -1239,7 +1255,7 @@ chrome.runtime.onMessage.addListener((message: unknown) => {
 
 // 处理来自 Popup / Manager / Content Script / Offscreen 的 RPC 消息
 chrome.runtime.onMessage.addListener(
-  (message: unknown, _sender, sendResponse): boolean | undefined => {
+  (message: unknown, sender, sendResponse): boolean | undefined => {
     if (
       !message ||
       typeof message !== "object" ||
@@ -1250,6 +1266,10 @@ chrome.runtime.onMessage.addListener(
     }
 
     const req = message as ExtensionRequest;
+    if (req.type === "get_agent_credentials" && (sender.id !== chrome.runtime.id || sender.url !== chrome.runtime.getURL("offscreen.html"))) {
+      sendResponse({ ok: false, requestId: req.requestId, error: { code: "FORBIDDEN", message: "Offscreen credentials are private", retryable: false } });
+      return;
+    }
     handleBackgroundCommand(req)
       .then((data) => {
         const res: ExtensionResponse = {

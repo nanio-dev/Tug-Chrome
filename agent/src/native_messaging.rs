@@ -35,6 +35,9 @@ pub fn spawn_native_messaging_stdio_loop(state: Arc<AppState>) {
         let mut stdin = std::io::stdin().lock();
         let mut len_buf = [0u8; 4];
         while stdin.read_exact(&mut len_buf).is_ok() {
+            if state.shutting_down.load(Ordering::Relaxed) {
+                break;
+            }
             state.touch();
             let msg_len = u32::from_le_bytes(len_buf) as usize;
             if msg_len == 0 || msg_len > 4 * 1024 * 1024 {
@@ -48,6 +51,9 @@ pub fn spawn_native_messaging_stdio_loop(state: Arc<AppState>) {
                 && let Some(ext_id) = json.get("extId").and_then(|v| v.as_str())
             {
                 let _ = install_and_register(Some(ext_id), false);
+            }
+            if state.shutting_down.load(Ordering::Relaxed) {
+                break;
             }
             let pong = serde_json::json!({
                 "ok": true,

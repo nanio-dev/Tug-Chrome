@@ -27,6 +27,7 @@ pub struct AppState {
     pub entries: RwLock<HashMap<usize, ManagedSessionEntry>>,
     pub last_activity_secs: AtomicU64,
     pub native_stdin_active: AtomicBool,
+    pub shutting_down: AtomicBool,
     pub active_operations: AtomicU64,
     pub bound_port: u16,
 }

@@ -64,3 +64,5 @@ npm run bench:http -- --connections=8,32 --repeats=3 --mib=128
 `npm run bench:agent-http` 使用独立 Agent 目录与临时用户数据，测量浏览器 HTTP/OPFS 下载、Agent 导出与总耗时，并校验实际系统输出的 SHA-256；默认 128 MiB、8/32 配置各 3 次。需要先构建 agent/tug-agent.exe。大文件可运行 `node scripts/benchmark-agent-http.mjs --mib=1024 --repeats=1 --output=agent-http-benchmark-1024.json`。
 
 Agent 生命周期用例 tests/agent-lifecycle.test.mjs 在隔离用户目录验证旧进程替换、AppData 迁移与原文件清理，以及保持原生 stdin/健康轮询时的空闲退出。测试使用 --isolated-install 跳过真实注册表，只匹配隔离目录的进程；--idle-timeout 仅对隔离/serve-only 模式生效，正式值仍为 120 秒。
+
+2026-11-16 新增 tests/browser/agent-export.test.mjs：真实 Offscreen + 实际 Agent HTTP 导出，Native Messaging 仅做传输模拟，后台 session 存储与私有凭据 RPC 实际运行；校验重启及凭据轮换后的完整文件哈希，禁止回退浏览器保存。浏览器普通页面不能调用凭据 RPC。生命周期测试还验证运行中的 AppData 二进制卸载、目录删除确认、临时文件最终清理。

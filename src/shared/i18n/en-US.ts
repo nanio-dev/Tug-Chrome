@@ -148,6 +148,7 @@ export const enUS: Messages = {
   "settings.btHelperUninstallBtn": "Uninstall Tug Agent",
   "settings.btHelperUninstalling": "Uninstalling…",
   "settings.btHelperUninstallConfirm": "Uninstall local Tug Agent? This removes its registry entries, config, and local binary.",
+  "settings.btHelperUninstallFailed": "Uninstall did not complete. Check that Agent is installed and retry.",
   "settings.btHelperUninstalled": "Tug Agent uninstalled",
   "settings.theme": "Theme",
   "settings.theme.system": "Follow System",

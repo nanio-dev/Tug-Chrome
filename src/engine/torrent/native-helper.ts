@@ -31,16 +31,27 @@ async function helperToken(): Promise<string | null> {
     const stored = (await chrome.storage.session.get(TOKEN_KEY))[TOKEN_KEY];
     return typeof stored === "string" ? stored : null;
   }
+  if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
+    // Offscreen documents expose runtime, but not chrome.storage/nativeMessaging.
+    const response = await chrome.runtime.sendMessage({ channel: "tug-web-rpc", target: "background", type: "get_agent_credentials", requestId: crypto.randomUUID(), payload: {} });
+    if (!response?.ok || !/^[a-f0-9]{64}$/i.test(response.data?.token ?? "")) throw new Error(response?.error?.message || "Agent 自动连接失败，下载缓存已保留，可重试保存");
+    memoryToken = response.data.token;
+  }
   return memoryToken;
 }
+export async function readHelperCredentials(): Promise<string | null> { return helperToken(); }
 
 export async function helperRequestHeaders(url: string, init?: HeadersInit): Promise<Headers> {
   const headers = new Headers(init);
   headers.delete("X-Tug-Agent-Token");
   // Capabilities must never be sent to a torrent's remote web seeds.
   if (new URL(url).origin === NATIVE_HELPER_BASE_URL) {
-    const token = await helperToken();
-    if (!token) throw new Error("请先通过 Native Messaging 连接 Tug Agent");
+    let token = await helperToken();
+    if (!token && typeof chrome !== "undefined" && typeof chrome.runtime?.connectNative === "function") {
+      await connectHelperNative();
+      token = await helperToken();
+    }
+    if (!token) throw new Error("Agent 自动连接失败，下载缓存已保留，可重试保存");
     headers.set("X-Tug-Agent-Token", token);
   }
   return headers;
@@ -48,9 +59,15 @@ export async function helperRequestHeaders(url: string, init?: HeadersInit): Pro
 
 async function fetchHelper(url: string, init: RequestInit = {}): Promise<Response> {
   if (new URL(url).origin !== NATIVE_HELPER_BASE_URL) throw new Error("Invalid Agent origin");
-  const resp = await fetch(url, { ...init, redirect: "error", headers: await helperRequestHeaders(url, init.headers) });
-  if (resp.status === 401) await setHelperCredentials(null);
-  return resp;
+  for (let attempt = 0; ; attempt++) {
+    const resp = await fetch(url, { ...init, redirect: "error", headers: await helperRequestHeaders(url, init.headers) });
+    if (resp.status !== 401) return resp;
+    await setHelperCredentials(null);
+    if (attempt === 1) return resp;
+    await resp.body?.cancel();
+    // 401 is rejected before any file operation, so retrying once is safe.
+    if (typeof chrome !== "undefined" && chrome.storage?.session) await connectHelperNative();
+  }
 }
 
 export interface HelperSessionStartInput {
@@ -365,17 +382,15 @@ export async function deleteFileViaHelper(path: string): Promise<boolean> {
 
 export async function uninstallViaHelper(): Promise<boolean> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 3500);
+  const timer = setTimeout(() => controller.abort(), 15000);
   try {
     const resp = await fetchHelper(`${NATIVE_HELPER_BASE_URL}/uninstall`, {
       method: "POST",
       signal: controller.signal,
     });
-    if (!resp.ok) return false;
+    if (!resp.ok) throw new Error(`Agent 卸载失败 (HTTP ${resp.status}): ${(await resp.text()).slice(0, 300)}`);
     const data = (await resp.json()) as { ok?: boolean };
     return Boolean(data?.ok);
-  } catch {
-    return false;
   } finally {
     clearTimeout(timer);
   }

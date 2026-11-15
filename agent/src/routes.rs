@@ -412,6 +412,12 @@ pub async fn handle_stop_session(
 }
 
 pub async fn handle_uninstall(State(state): State<Arc<AppState>>) -> Response {
+    if state
+        .shutting_down
+        .swap(true, std::sync::atomic::Ordering::SeqCst)
+    {
+        return json_error(StatusCode::CONFLICT, "Agent is shutting down");
+    }
     {
         let mut entries = state.entries.write().await;
         let ids: Vec<usize> = entries.keys().copied().collect();
@@ -422,7 +428,15 @@ pub async fn handle_uninstall(State(state): State<Arc<AppState>>) -> Response {
             entries.remove(&id);
         }
     }
-    uninstall_self();
+    if let Err(err) = uninstall_self() {
+        state
+            .shutting_down
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        return json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("卸载未完成: {err:#}"),
+        );
+    }
     crate::auth::remove_token();
     tokio::spawn(async {
         tokio::time::sleep(Duration::from_millis(250)).await;

@@ -38,6 +38,7 @@ export function SettingsView({
   });
   const [uninstallingHelper, setUninstallingHelper] = useState(false);
   const [uninstallToast, setUninstallToast] = useState(false);
+  const [uninstallError, setUninstallError] = useState<string | null>(null);
   const [diagLogs, setDiagLogs] = useState<string[]>([]);
   const [copiedLogs, setCopiedLogs] = useState(false);
 
@@ -69,13 +70,16 @@ export function SettingsView({
     if (!window.confirm(t("settings.btHelperUninstallConfirm"))) return;
     setUninstallingHelper(true);
     setUninstallToast(false);
+    setUninstallError(null);
     try {
       const res = await uninstallNativeAgent();
       if (res.uninstalled) {
         setHelperStatus({ available: false, installed: false });
         setUninstallToast(true);
         setTimeout(() => setUninstallToast(false), 3000);
-      }
+      } else { setUninstallError(t("settings.btHelperUninstallFailed")); }
+    } catch (err) {
+      setUninstallError(err instanceof Error ? err.message : String(err));
     } finally {
       setUninstallingHelper(false);
     }
@@ -418,6 +422,7 @@ export function SettingsView({
                   </button>
                 )}
               </div>
+              {uninstallError && <div className="hint" role="alert" style={{ color: "var(--red)" }}>{uninstallError}</div>}
               {uninstallToast && (
                 <div className="hint ok">{t("settings.btHelperUninstalled")}</div>
               )}

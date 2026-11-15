@@ -20,7 +20,7 @@ export async function findBrowser() {
   throw new Error("Set TUG_TEST_BROWSER to an installed Chromium executable, or install Chromium using Playwright.");
 }
 
-export async function launchHarness({ ignoreHTTPSErrors = false } = {}) {
+export async function launchHarness({ ignoreHTTPSErrors = false, agentPort } = {}) {
   const tempRoot = process.env.TUG_TEST_TMPDIR || os.tmpdir();
   await fs.mkdir(tempRoot, { recursive: true });
   const temp = await fs.mkdtemp(path.join(tempRoot, "tug-web-browser-"));
@@ -39,6 +39,14 @@ export async function launchHarness({ ignoreHTTPSErrors = false } = {}) {
     lib: { entry, formats: ["es"], fileName: () => "test-lib.js" } } });
   await fs.writeFile(path.join(extension, "test.html"), '<!doctype html><title>Tug test harness</title><script type="module" src="test.js"></script>');
   await fs.writeFile(path.join(extension, "test.js"), 'import * as audit from "./test-lib.js"; window.audit=audit;');
+  if (agentPort !== undefined) {
+    if (!Number.isInteger(agentPort) || agentPort < 1 || agentPort > 65535) throw new Error("Invalid isolated Agent port");
+    const files = ["background.js", "test-lib.js", ...(await fs.readdir(path.join(extension, "assets"))).filter(n => n.endsWith(".js")).map(n => "assets/" + n)];
+    for (const name of files) {
+      const filename = path.join(extension, name);
+      await fs.writeFile(filename, (await fs.readFile(filename, "utf8")).replaceAll("16899", String(agentPort)));
+    }
+  }
   const context = await chromium.launchPersistentContext(path.join(temp, "profile"), {
     executablePath: await findBrowser(), headless: true, viewport: { width: 1440, height: 1000 },
     ignoreHTTPSErrors,

@@ -146,6 +146,7 @@ export const zhCN = {
   "settings.btHelperUninstallBtn": "卸载 Tug Agent",
   "settings.btHelperUninstalling": "正在卸载…",
   "settings.btHelperUninstallConfirm": "确定要卸载本地 Tug Agent 吗？将清理其注册表、配置文件及本地程序。",
+  "settings.btHelperUninstallFailed": "未能完成卸载，请确认 Agent 已安装并重新尝试。",
   "settings.btHelperUninstalled": "Tug Agent 已卸载",
   "settings.theme": "界面主题",
   "settings.theme.system": "跟随系统",

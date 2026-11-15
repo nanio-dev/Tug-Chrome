@@ -103,3 +103,13 @@ it('silently reconnects an already paired browser and automatically closes the a
 it('registers a running Agent silently before retrieving Native Messaging credentials',async()=>{await withBackground('autoregister',async({p})=>{assert.equal((await rpc(p,'launch_downloaded_agent',{downloadId:12})).phase,'ready');});});
 
 it('recovers browser save completion after service worker suspension',async()=>{const h=await launchHarness();try{const worker=h.context.serviceWorkers()[0];await worker.evaluate(async()=>{await chrome.storage.session.set({tugAgentInstallSession:{state:{phase:'confirming_save',bytesReceived:10,totalBytes:10,downloadId:123}}});chrome.downloads.search=async()=>[{id:123,state:'complete',exists:true}];});const p=await h.openPage();assert.equal((await rpc(p,'get_agent_install_state')).phase,'need_manual_launch');}finally{await h.close();}});
+it('uninstall disables Agent mode and clears credentials so later UI refreshes cannot wake it',async()=>{
+ await withBackground('ready',async({p,worker})=>{
+  await rpc(p,'ensure_native_helper',{allowProtocolFallback:false});
+  await worker.evaluate(()=>{const original=fetch;globalThis.fetch=(url,init)=>String(url).endsWith('/uninstall')?Promise.resolve(Response.json({ok:true})):original(url,init);});
+  assert.equal((await rpc(p,'uninstall_native_agent')).uninstalled,true);
+  assert.equal((await rpc(p,'get_state_snapshot')).settings.standaloneMode,true);
+  assert.equal(await worker.evaluate(async()=>(await chrome.storage.session.get('tugAgentSessionToken')).tugAgentSessionToken),undefined);
+  assert.equal((await rpc(p,'ensure_native_helper')).standaloneMode,true);
+ });
+});

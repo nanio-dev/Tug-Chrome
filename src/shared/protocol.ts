@@ -32,6 +32,7 @@ export type CommandType =
   | "clear_request_headers"
   | "export_blob_to_downloads"
   | "cancel_task_export"
+  | "get_agent_credentials"
   | "get_native_helper_status"
   | "ensure_native_helper"
   | "activate_native_helper_protocol"
