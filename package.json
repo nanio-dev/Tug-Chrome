@@ -1,0 +1,27 @@
+{
+  "name": "tug-web",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Tug Web — Standalone Multi-connection HTTP/HTTPS & BitTorrent/Magnet Browser Extension",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite build --watch",
+    "check": "tsc --noEmit",
+    "build": "tsc --noEmit && vite build && node scripts/build-extension.mjs",
+    "test": "node --import ./tests/register-loader.mjs --test tests/*.test.ts"
+  },
+  "dependencies": {
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.313",
+    "@types/node": "^22.13.0",
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "@vitejs/plugin-react": "^6.0.2",
+    "typescript": "~6.0.3",
+    "vite": "^8.0.16"
+  }
+}

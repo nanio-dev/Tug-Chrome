@@ -1,0 +1,26 @@
+{
+  "extName": {
+    "message": "Tug Web — Multi-connection & Torrent/Magnet Downloader",
+    "description": "Extension name"
+  },
+  "extDescription": {
+    "message": "Standalone browser download manager extension with HTTP/HTTPS multi-connection acceleration, resume support, download takeover, and BitTorrent/Magnet support.",
+    "description": "Extension description"
+  },
+  "ctxDownloadLink": {
+    "message": "Download link with Tug Web",
+    "description": "Context menu for links"
+  },
+  "ctxDownloadMedia": {
+    "message": "Download media with Tug Web",
+    "description": "Context menu for media"
+  },
+  "ctxDownloadSelection": {
+    "message": "Download selected URL/Magnet with Tug Web",
+    "description": "Context menu for selected text"
+  },
+  "ctxOpenManager": {
+    "message": "Open Tug Web Download Manager",
+    "description": "Context menu to open manager"
+  }
+}

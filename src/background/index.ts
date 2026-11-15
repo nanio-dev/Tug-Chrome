@@ -1,0 +1,1124 @@
+import {
+  extractDownloadCandidate,
+  guessFileNameFromUrl,
+  sanitizeFileName,
+  shouldInterceptBrowserDownload,
+} from "../shared/filename";
+import {
+  createRequestId,
+  type AgentInstallState,
+  type ExportBlobPayload,
+  type ExtensionBroadcastMessage,
+  type ExtensionRequest,
+  type ExtensionResponse,
+  type NativeHelperStatus,
+  type PrepareHeadersPayload,
+} from "../shared/protocol";
+import {
+  checkHelperHealth,
+  deleteFileViaHelper,
+  NATIVE_HELPER_HOST_NAME,
+  openFileViaHelper,
+  registerExtIdWithHelper,
+} from "../engine/torrent/native-helper";
+import { parseTorrentBuffer, uint8ArrayToBase64 } from "../engine/torrent/parser";
+import {
+  DEFAULT_SETTINGS,
+  normalizeSettings,
+  type AddTaskInput,
+  type Settings,
+  type TaskView,
+} from "../shared/types";
+
+let creatingOffscreen: Promise<void> | null = null;
+const selfExportedDownloadIds = new Set<number>();
+const pendingBlobExports = new Map<string, string>();
+let cachedSettings: Settings = { ...DEFAULT_SETTINGS };
+let settingsInitialized = false;
+let settingsInitPromise: Promise<void> | null = null;
+
+async function loadCachedSettings(forceRefresh = false): Promise<Settings> {
+  if (forceRefresh || !settingsInitialized) {
+    if (forceRefresh || !settingsInitPromise) {
+      settingsInitPromise = (async () => {
+        try {
+          const stored = await chrome.storage.local.get("tugWebSettings");
+          if (stored?.tugWebSettings) {
+            cachedSettings = normalizeSettings(stored.tugWebSettings as Partial<Settings>);
+          }
+          settingsInitialized = true;
+        } catch {
+          // ignore
+        }
+      })();
+    }
+    await settingsInitPromise;
+  }
+  return cachedSettings;
+}
+
+chrome.storage?.onChanged.addListener((changes, areaName) => {
+  if (areaName === "local" && changes.tugWebSettings?.newValue) {
+    cachedSettings = normalizeSettings(changes.tugWebSettings.newValue as Partial<Settings>);
+    settingsInitialized = true;
+  }
+});
+
+void loadCachedSettings();
+
+async function ensureOffscreenDocument(): Promise<void> {
+  const offscreenUrl = chrome.runtime.getURL("offscreen.html");
+  if ("getContexts" in chrome.runtime) {
+    const contexts = await chrome.runtime.getContexts({
+      contextTypes: [chrome.runtime.ContextType.OFFSCREEN_DOCUMENT],
+      documentUrls: [offscreenUrl],
+    });
+    if (contexts.length > 0) {
+      return;
+    }
+  }
+
+  if (creatingOffscreen) {
+    await creatingOffscreen;
+    return;
+  }
+
+  creatingOffscreen = chrome.offscreen
+    .createDocument({
+      url: "offscreen.html",
+      reasons: [
+        chrome.offscreen.Reason.BLOBS,
+        chrome.offscreen.Reason.WORKERS,
+        chrome.offscreen.Reason.WEB_RTC,
+      ],
+      justification:
+        "Host multi-connection HTTP Range download workers, OPFS file assembly, and WebRTC P2P sessions.",
+    })
+    .catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!msg.includes("Only a single offscreen")) {
+        throw err;
+      }
+    })
+    .finally(() => {
+      creatingOffscreen = null;
+    });
+
+  await creatingOffscreen;
+}
+
+async function forwardToOffscreen<TResponse = unknown, TPayload = unknown>(
+  type: ExtensionRequest["type"],
+  payload?: TPayload,
+): Promise<TResponse> {
+  await ensureOffscreenDocument();
+  const req: ExtensionRequest<TPayload> = {
+    channel: "tug-web-rpc",
+    target: "offscreen",
+    type,
+    requestId: createRequestId(),
+    payload: (payload ?? {}) as TPayload,
+  };
+
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage(req, (resp: ExtensionResponse<TResponse> | undefined) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+        return;
+      }
+      if (!resp) {
+        reject(new Error("Offscreen 引擎无响应"));
+        return;
+      }
+      if (!resp.ok) {
+        reject(new Error(resp.error.message));
+        return;
+      }
+      resolve(resp.data);
+    });
+  });
+}
+
+async function applySessionHeaderRules(payload: PrepareHeadersPayload): Promise<void> {
+  if (!chrome.declarativeNetRequest?.updateSessionRules) return;
+  const ruleId = 10000 + (payload.taskId % 50000);
+  const requestHeaders: chrome.declarativeNetRequest.ModifyHeaderInfo[] = [];
+
+  if (payload.referrer && payload.referrer.trim()) {
+    requestHeaders.push({
+      header: "Referer",
+      operation: chrome.declarativeNetRequest.HeaderOperation.SET,
+      value: payload.referrer.trim(),
+    });
+  }
+
+  for (const [name, value] of payload.headers ?? []) {
+    if (!name || !value) continue;
+    if (name.toLowerCase() === "referer" && payload.referrer) continue;
+    requestHeaders.push({
+      header: name,
+      operation: chrome.declarativeNetRequest.HeaderOperation.SET,
+      value,
+    });
+  }
+
+  if (requestHeaders.length === 0) return;
+
+  let urlFilter = payload.url;
+  try {
+    const parsed = new URL(payload.url);
+    urlFilter = `||${parsed.hostname}/`;
+  } catch {
+    // keep raw url
+  }
+
+  await chrome.declarativeNetRequest.updateSessionRules({
+    removeRuleIds: [ruleId],
+    addRules: [
+      {
+        id: ruleId,
+        priority: 1,
+        action: {
+          type: chrome.declarativeNetRequest.RuleActionType.MODIFY_HEADERS,
+          requestHeaders,
+        },
+        condition: {
+          urlFilter,
+          resourceTypes: [
+            chrome.declarativeNetRequest.ResourceType.XMLHTTPREQUEST,
+            chrome.declarativeNetRequest.ResourceType.OTHER,
+          ],
+        },
+      },
+    ],
+  });
+}
+
+async function clearSessionHeaderRules(taskId: number): Promise<void> {
+  if (!chrome.declarativeNetRequest?.updateSessionRules) return;
+  const ruleId = 10000 + (taskId % 50000);
+  await chrome.declarativeNetRequest.updateSessionRules({
+    removeRuleIds: [ruleId],
+  });
+}
+
+if (chrome.downloads?.onDeterminingFilename) {
+  chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
+    const expected =
+      (item.finalUrl ? pendingBlobExports.get(item.finalUrl) : undefined) ??
+      pendingBlobExports.get(item.url);
+    if (expected) {
+      suggest({ filename: expected, conflictAction: "uniquify" });
+      return;
+    }
+    if (item.byExtensionId === chrome.runtime.id && item.filename) {
+      suggest({ filename: item.filename, conflictAction: "uniquify" });
+    }
+  });
+}
+
+async function exportBlobToDownloads(
+  payload: ExportBlobPayload,
+): Promise<{ downloadId: number | null; savedPath?: string | null }> {
+  const segments = payload.relativePath
+    .replace(/\\/g, "/")
+    .split("/")
+    .map((seg) => seg.trim())
+    .filter((seg) => seg && seg !== "." && seg !== "..")
+    .map((seg) => sanitizeFileName(seg, ""))
+    .filter(Boolean);
+  const cleanFilename = segments.join("/") || "download";
+  const fallbackBaseName = segments[segments.length - 1] || "download";
+
+  pendingBlobExports.set(payload.blobUrl, cleanFilename);
+
+  try {
+    let downloadId: number | undefined;
+    try {
+      downloadId = await chrome.downloads.download({
+        url: payload.blobUrl,
+        filename: cleanFilename,
+        conflictAction: "uniquify",
+        saveAs: false,
+      });
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      const isUserCancel = /cancel|user|abort|interrupted/i.test(errMsg);
+      const isFilenameIssue = /filename|invalid/i.test(errMsg);
+      if (!isUserCancel && isFilenameIssue && cleanFilename !== fallbackBaseName) {
+        pendingBlobExports.set(payload.blobUrl, fallbackBaseName);
+        downloadId = await chrome.downloads.download({
+          url: payload.blobUrl,
+          filename: fallbackBaseName,
+          conflictAction: "uniquify",
+          saveAs: false,
+        });
+      } else if (isUserCancel) {
+        throw new Error("已取消保存文件（点击「继续」可重新保存，无需重新下载）");
+      } else {
+        throw err;
+      }
+    }
+
+    if (typeof downloadId !== "number") {
+      throw new Error("已取消保存文件（点击「继续」可重新保存，无需重新下载）");
+    }
+
+    selfExportedDownloadIds.add(downloadId);
+    let wasErased = false;
+    let interruptedError: string | null = null;
+
+    // 等待系统下载导出完成（同时监听 onChanged / onErased，并立即查询一次避免错过瞬间完成的事件）
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const cleanup = () => {
+        clearTimeout(timeout);
+        chrome.downloads.onChanged.removeListener(onChanged);
+        chrome.downloads.onErased?.removeListener(onErased);
+      };
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve();
+      };
+      const timeout = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(new Error("等待浏览器保存文件超时（点击「继续」可重新保存，无需重新下载）"));
+      }, 600000);
+      const onChanged = (delta: chrome.downloads.DownloadDelta) => {
+        if (delta.id !== downloadId) return;
+        if (delta.error?.current) {
+          interruptedError = delta.error.current;
+        }
+        if (
+          delta.state?.current === "complete" ||
+          delta.state?.current === "interrupted" ||
+          Boolean(delta.error?.current)
+        ) {
+          finish();
+        }
+      };
+      const onErased = (erasedId: number) => {
+        if (erasedId !== downloadId) return;
+        wasErased = true;
+        finish();
+      };
+      chrome.downloads.onChanged.addListener(onChanged);
+      chrome.downloads.onErased?.addListener(onErased);
+
+      void chrome.downloads
+        .search({ id: downloadId })
+        .then((items) => {
+          const cur = items[0];
+          if (!cur) {
+            wasErased = true;
+            finish();
+            return;
+          }
+          if (cur.error) {
+            interruptedError = cur.error;
+          }
+          if (cur.state === "complete" || cur.state === "interrupted") {
+            finish();
+          }
+        })
+        .catch(() => {});
+    });
+
+    const items = await chrome.downloads.search({ id: downloadId }).catch(() => []);
+    const item = items[0];
+    if (
+      wasErased ||
+      interruptedError ||
+      !item ||
+      item.state !== "complete" ||
+      item.exists === false ||
+      !item.filename
+    ) {
+      const reason =
+        item?.error || interruptedError || (wasErased || !item ? "USER_CANCELED" : "EXPORT_INCOMPLETE");
+      throw new Error(
+        reason === "USER_CANCELED"
+          ? "已取消保存文件（点击「继续」可重新保存，无需重新下载）"
+          : `浏览器导出文件失败 (${reason})`,
+      );
+    }
+
+    return { downloadId, savedPath: item.filename };
+  } finally {
+    pendingBlobExports.delete(payload.blobUrl);
+  }
+}
+
+async function openManagerTab(initialUrl?: string): Promise<void> {
+  const baseUrl = chrome.runtime.getURL("manager.html");
+  const targetUrl = initialUrl
+    ? `${baseUrl}?add=${encodeURIComponent(initialUrl)}`
+    : baseUrl;
+
+  const existingTabs = await chrome.tabs.query({ url: `${baseUrl}*` });
+  if (existingTabs.length > 0 && existingTabs[0].id !== undefined) {
+    const tab = existingTabs[0];
+    if (initialUrl) {
+      await chrome.tabs.update(tab.id!, { url: targetUrl, active: true });
+    } else {
+      await chrome.tabs.update(tab.id!, { active: true });
+    }
+    if (tab.windowId !== undefined) {
+      await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
+    }
+    return;
+  }
+
+  await chrome.tabs.create({ url: targetUrl, active: true });
+}
+
+let extIdRegisteredInSession = false;
+
+async function ensureExtIdRegisteredOnce(): Promise<void> {
+  if (extIdRegisteredInSession) return;
+  const ok = await registerExtIdWithHelper(chrome.runtime.id);
+  if (ok) {
+    extIdRegisteredInSession = true;
+  }
+}
+
+async function activateNativeHelperViaProtocol(): Promise<NativeHelperStatus> {
+  const existing = await checkHelperHealth(800);
+  if (existing.available) {
+    await ensureExtIdRegisteredOnce();
+    return existing;
+  }
+
+  const protoUrl = `tug-agent://register?extId=${encodeURIComponent(chrome.runtime.id)}`;
+  let helperTabId: number | undefined;
+  try {
+    const tab = await chrome.tabs.create({ url: protoUrl, active: true });
+    helperTabId = tab.id;
+  } catch {
+    // ignore
+  }
+
+  for (let i = 0; i < 18; i += 1) {
+    await new Promise((r) => setTimeout(r, 400));
+    const status = await checkHelperHealth(700);
+    if (status.available) {
+      await ensureExtIdRegisteredOnce();
+      if (helperTabId !== undefined) {
+        await chrome.tabs.remove(helperTabId).catch(() => {});
+      }
+      return status;
+    }
+  }
+
+  if (helperTabId !== undefined) {
+    await chrome.tabs.remove(helperTabId).catch(() => {});
+  }
+  return checkHelperHealth(800);
+}
+
+async function ensureNativeHelperRunning(options?: {
+  allowProtocolFallback?: boolean;
+}): Promise<NativeHelperStatus> {
+  await loadCachedSettings();
+  if (cachedSettings.standaloneMode) {
+    return { available: false, standaloneMode: true };
+  }
+
+  const initial = await checkHelperHealth(900);
+  if (initial.available) {
+    void ensureExtIdRegisteredOnce();
+    return { ...initial, installed: true };
+  }
+
+  if (chrome.runtime?.connectNative) {
+    try {
+      let disconnected = false;
+      const port = chrome.runtime.connectNative(NATIVE_HELPER_HOST_NAME);
+      port.onDisconnect.addListener(() => {
+        disconnected = true;
+        void chrome.runtime.lastError;
+      });
+      try {
+        port.postMessage({ action: "ping", extId: chrome.runtime.id });
+      } catch {
+        // ignore
+      }
+
+      // 最多短时唤醒探测 ~4.8s；若宿主未安装/已被卸载，onDisconnect 会立即触发并提前结束
+      for (let i = 0; i < 16; i += 1) {
+        await new Promise((r) => setTimeout(r, 300));
+        const status = await checkHelperHealth(disconnected ? 250 : 600);
+        if (status.available) {
+          void ensureExtIdRegisteredOnce();
+          try {
+            port.disconnect();
+          } catch {
+            // ignore
+          }
+          return { ...status, installed: true };
+        }
+        if (disconnected) {
+          break;
+        }
+      }
+      try {
+        port.disconnect();
+      } catch {
+        // ignore
+      }
+    } catch {
+      // ignore native messaging errors
+    }
+  }
+
+  if (options?.allowProtocolFallback) {
+    const protoStatus = await activateNativeHelperViaProtocol();
+    return { ...protoStatus, installed: protoStatus.available };
+  }
+
+  const finalStatus = await checkHelperHealth(500);
+  return { ...finalStatus, installed: finalStatus.available };
+}
+
+const AGENT_DOWNLOAD_URL =
+  "https://raw.githubusercontent.com/nanio-dev/Tug-Web/main/agent/tug-agent.exe";
+
+let agentInstallState: AgentInstallState = {
+  phase: "idle",
+  bytesReceived: 0,
+  totalBytes: 0,
+  downloadId: null,
+};
+
+async function waitForAgentHealthAndRegister(timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const st = await checkHelperHealth(450);
+    if (st.available) {
+      await ensureExtIdRegisteredOnce();
+      return true;
+    }
+    await new Promise((r) => setTimeout(r, 350));
+  }
+  return false;
+}
+
+async function launchDownloadedAgentById(downloadId: number): Promise<AgentInstallState> {
+  agentInstallState = {
+    ...agentInstallState,
+    phase: "launching",
+    downloadId,
+    message: undefined,
+  };
+  try {
+    await chrome.downloads.open(downloadId);
+  } catch {
+    // 某些浏览器后台调用 downloads.open 受手势限制，交由后续健康检查或前台按钮触发
+  }
+  agentInstallState = { ...agentInstallState, phase: "waiting_ready", downloadId };
+  const ok = await waitForAgentHealthAndRegister(4500);
+  if (ok) {
+    agentInstallState = { ...agentInstallState, phase: "ready", downloadId };
+  } else {
+    agentInstallState = { ...agentInstallState, phase: "need_manual_launch", downloadId };
+  }
+  return agentInstallState;
+}
+
+async function startInstallNativeAgent(): Promise<AgentInstallState> {
+  agentInstallState = {
+    phase: "checking",
+    bytesReceived: 0,
+    totalBytes: 0,
+    downloadId: null,
+  };
+
+  // 若本机已安装且能唤醒，直接激活完成
+  const existing = await ensureNativeHelperRunning({ allowProtocolFallback: false });
+  if (existing.available) {
+    agentInstallState = {
+      phase: "ready",
+      bytesReceived: 0,
+      totalBytes: 0,
+      downloadId: null,
+    };
+    return agentInstallState;
+  }
+
+  try {
+    const downloadId = await chrome.downloads.download({
+      url: AGENT_DOWNLOAD_URL,
+      filename: "tug-agent.exe",
+      conflictAction: "overwrite",
+      saveAs: false,
+    });
+    selfExportedDownloadIds.add(downloadId);
+    agentInstallState = {
+      phase: "downloading",
+      bytesReceived: 0,
+      totalBytes: 0,
+      downloadId,
+    };
+
+    void (async () => {
+      for (let i = 0; i < 600; i += 1) {
+        await new Promise((r) => setTimeout(r, 150));
+        const items = await chrome.downloads.search({ id: downloadId }).catch(() => []);
+        const item = items[0];
+        if (!item) {
+          agentInstallState = {
+            ...agentInstallState,
+            phase: "error",
+            message: "下载记录不存在",
+          };
+          return;
+        }
+        if (item.state === "in_progress") {
+          agentInstallState = {
+            phase: "downloading",
+            bytesReceived: item.bytesReceived ?? 0,
+            totalBytes: item.totalBytes ?? 0,
+            downloadId,
+          };
+          continue;
+        }
+        if (item.state === "complete") {
+          agentInstallState = {
+            phase: "launching",
+            bytesReceived: item.totalBytes || item.bytesReceived || 0,
+            totalBytes: item.totalBytes || item.bytesReceived || 0,
+            downloadId,
+          };
+          await launchDownloadedAgentById(downloadId);
+          return;
+        }
+        if (item.state === "interrupted") {
+          agentInstallState = {
+            ...agentInstallState,
+            phase: "error",
+            message: item.error || "下载被中断",
+          };
+          return;
+        }
+      }
+    })();
+
+    return agentInstallState;
+  } catch (err) {
+    agentInstallState = {
+      phase: "error",
+      bytesReceived: 0,
+      totalBytes: 0,
+      downloadId: null,
+      message: err instanceof Error ? err.message : String(err),
+    };
+    return agentInstallState;
+  }
+}
+
+async function findBrowserDownloadIdForTask(task: TaskView): Promise<number | null> {
+  if (!chrome.downloads?.search) return null;
+
+  if (task.chromeDownloadId !== null && task.chromeDownloadId !== undefined) {
+    try {
+      const items = await chrome.downloads.search({ id: task.chromeDownloadId });
+      const item = items[0];
+      if (item && item.exists !== false && item.state === "complete") {
+        return item.id;
+      }
+    } catch {
+      // ignore invalid or erased downloadId
+    }
+  }
+
+  const candidates = [task.fileName, task.name].filter((s): s is string => Boolean(s && s.trim()));
+  for (const name of candidates) {
+    try {
+      const items = await chrome.downloads.search({
+        query: [name],
+        state: "complete",
+        exists: true,
+        orderBy: ["-startTime"],
+        limit: 10,
+      });
+      const lowerName = name.toLowerCase();
+      const matched =
+        items.find((it) => {
+          const fn = (it.filename || "").replace(/\\/g, "/").toLowerCase();
+          return fn.endsWith(`/${lowerName}`) || fn === lowerName;
+        }) ?? items[0];
+      if (matched) {
+        return matched.id;
+      }
+    } catch {
+      // ignore search errors
+    }
+  }
+
+  return null;
+}
+
+function tryOpenBrowserDownload(downloadId: number): boolean {
+  try {
+    chrome.downloads.open(downloadId);
+    return true;
+  } catch {
+    try {
+      chrome.downloads.show(downloadId);
+    } catch {
+      // ignore
+    }
+    return false;
+  }
+}
+
+async function handleBackgroundCommand(req: ExtensionRequest): Promise<unknown> {
+  await loadCachedSettings();
+
+  switch (req.type) {
+    case "get_native_helper_status": {
+      if (cachedSettings.standaloneMode) {
+        return { available: false, standaloneMode: true };
+      }
+      const status = await checkHelperHealth(900);
+      if (status.available) {
+        void ensureExtIdRegisteredOnce();
+      }
+      return status;
+    }
+    case "ensure_native_helper":
+      if (cachedSettings.standaloneMode) {
+        return { available: false, standaloneMode: true };
+      }
+      return ensureNativeHelperRunning(
+        req.payload as { allowProtocolFallback?: boolean } | undefined,
+      );
+    case "activate_native_helper_protocol":
+      if (cachedSettings.standaloneMode) {
+        return { available: false, standaloneMode: true };
+      }
+      return activateNativeHelperViaProtocol();
+    case "install_native_agent":
+      return startInstallNativeAgent();
+    case "get_agent_install_state":
+      return agentInstallState;
+    case "launch_downloaded_agent": {
+      const payload = req.payload as { downloadId: number };
+      return launchDownloadedAgentById(payload.downloadId);
+    }
+    case "prepare_request_headers":
+      await applySessionHeaderRules(req.payload as PrepareHeadersPayload);
+      return { ok: true };
+    case "clear_request_headers":
+      await clearSessionHeaderRules((req.payload as { taskId: number }).taskId);
+      return { ok: true };
+    case "export_blob_to_downloads":
+      return exportBlobToDownloads(req.payload as ExportBlobPayload);
+    case "open_manager_tab":
+      await openManagerTab((req.payload as { initialUrl?: string })?.initialUrl);
+      return { ok: true };
+    case "handle_torrent_url": {
+      const payload = req.payload as { url: string; referrer?: string | null };
+      return handleTorrentUrlSmart(payload.url, payload.referrer);
+    }
+    case "open_downloads_folder": {
+      if (!cachedSettings.standaloneMode) {
+        const helper = await checkHelperHealth(250);
+        if (helper.available) {
+          const res = await openFileViaHelper({
+            action: "open_folder",
+            subDir: cachedSettings.downloadSubdir,
+          });
+          if (res?.ok) {
+            return { opened: true };
+          }
+        }
+      }
+      chrome.downloads.showDefaultFolder();
+      return { opened: true };
+    }
+    case "open_task_file": {
+      const { id } = req.payload as { id: number };
+      const tasks = await forwardToOffscreen<TaskView[]>("list_tasks");
+      const task = tasks.find((t) => t.id === id);
+      const browserDownloadId = task ? await findBrowserDownloadIdForTask(task) : null;
+
+      if (
+        browserDownloadId !== null &&
+        (cachedSettings.standaloneMode || task?.chromeDownloadId !== null)
+      ) {
+        tryOpenBrowserDownload(browserDownloadId);
+        return { opened: true };
+      }
+
+      if (!cachedSettings.standaloneMode && task) {
+        const helper = await checkHelperHealth(250);
+        if (helper.available) {
+          const res = await openFileViaHelper({
+            action: "open_file",
+            path: task.path || task.fileName || task.name,
+            subDir: cachedSettings.downloadSubdir,
+          });
+          if (res?.ok) {
+            return { opened: Boolean(res.opened) };
+          }
+        }
+      }
+
+      if (browserDownloadId !== null) {
+        tryOpenBrowserDownload(browserDownloadId);
+        return { opened: true };
+      }
+
+      chrome.downloads.showDefaultFolder();
+      return { opened: false };
+    }
+    case "reveal_task_file": {
+      const { id } = req.payload as { id: number };
+      const tasks = await forwardToOffscreen<TaskView[]>("list_tasks");
+      const task = tasks.find((t) => t.id === id);
+      const browserDownloadId = task ? await findBrowserDownloadIdForTask(task) : null;
+
+      if (
+        browserDownloadId !== null &&
+        (cachedSettings.standaloneMode || task?.chromeDownloadId !== null)
+      ) {
+        chrome.downloads.show(browserDownloadId);
+        return { revealed: true };
+      }
+
+      if (!cachedSettings.standaloneMode && task) {
+        const helper = await checkHelperHealth(250);
+        if (helper.available) {
+          const res = await openFileViaHelper({
+            action: "reveal_file",
+            path: task.path || task.fileName || task.name,
+            subDir: cachedSettings.downloadSubdir,
+          });
+          if (res?.ok) {
+            return { revealed: Boolean(res.revealed) };
+          }
+        }
+      }
+
+      if (browserDownloadId !== null) {
+        chrome.downloads.show(browserDownloadId);
+        return { revealed: true };
+      }
+
+      chrome.downloads.showDefaultFolder();
+      return { revealed: false };
+    }
+    case "remove_task": {
+      const { id, deleteFiles } = req.payload as { id: number; deleteFiles: boolean };
+      if (deleteFiles) {
+        const tasks = await forwardToOffscreen<TaskView[]>("list_tasks").catch(() => [] as TaskView[]);
+        const target = tasks.find((t) => t.id === id);
+        if (target?.chromeDownloadId !== null && target?.chromeDownloadId !== undefined) {
+          await chrome.downloads.removeFile(target.chromeDownloadId).catch(() => {});
+          await chrome.downloads.erase({ id: target.chromeDownloadId }).catch(() => {});
+        }
+        if (target?.path && !cachedSettings.standaloneMode) {
+          const helper = await checkHelperHealth(250);
+          if (helper.available) {
+            await deleteFileViaHelper(target.path).catch(() => {});
+          }
+        }
+      }
+      return forwardToOffscreen("remove_task", { id, deleteFiles });
+    }
+    case "update_settings": {
+      const updated = await forwardToOffscreen<Settings>("update_settings", req.payload);
+      cachedSettings = updated;
+      settingsInitialized = true;
+      return updated;
+    }
+    default:
+      return forwardToOffscreen(req.type, req.payload);
+  }
+}
+
+function registerContextMenus(): void {
+  if (!chrome.contextMenus) return;
+  chrome.contextMenus.removeAll(() => {
+    chrome.contextMenus.create({
+      id: "tug-download-link",
+      title: chrome.i18n.getMessage("ctxDownloadLink") || "使用 Tug Web 下载此链接",
+      contexts: ["link"],
+    });
+    chrome.contextMenus.create({
+      id: "tug-download-media",
+      title: chrome.i18n.getMessage("ctxDownloadMedia") || "使用 Tug Web 下载此媒体",
+      contexts: ["image", "video", "audio"],
+    });
+    chrome.contextMenus.create({
+      id: "tug-download-selection",
+      title: chrome.i18n.getMessage("ctxDownloadSelection") || "使用 Tug Web 下载选中链接/磁力",
+      contexts: ["selection"],
+    });
+    chrome.contextMenus.create({
+      id: "tug-open-manager",
+      title: chrome.i18n.getMessage("ctxOpenManager") || "打开 Tug Web 下载管理面板",
+      contexts: ["page", "action"],
+    });
+  });
+}
+
+async function handleTorrentUrlSmart(
+  url: string,
+  referrer?: string | null,
+): Promise<{ startedDirectly: boolean }> {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const buf = new Uint8Array(await res.arrayBuffer());
+    const meta = await parseTorrentBuffer(buf);
+    if (meta.files.length <= 1) {
+      await forwardToOffscreen<TaskView, AddTaskInput>("add_task", {
+        url,
+        referrer: referrer ?? null,
+        fileName: meta.name,
+        torrentBytesBase64: uint8ArrayToBase64(buf),
+      });
+      return { startedDirectly: true };
+    }
+  } catch {
+    // 拉取/解析失败或包含多个文件时打开管理面板由用户确认
+  }
+  await openManagerTab(url);
+  return { startedDirectly: false };
+}
+
+chrome.contextMenus?.onClicked.addListener(async (info, tab) => {
+  if (info.menuItemId === "tug-open-manager") {
+    await openManagerTab();
+    return;
+  }
+
+  let candidateUrl: string | null = null;
+  if (info.menuItemId === "tug-download-link" && info.linkUrl) {
+    candidateUrl = info.linkUrl;
+  } else if (info.menuItemId === "tug-download-media" && info.srcUrl) {
+    candidateUrl = info.srcUrl;
+  } else if (info.menuItemId === "tug-download-selection" && info.selectionText) {
+    candidateUrl = extractDownloadCandidate(info.selectionText);
+  }
+
+  if (!candidateUrl) return;
+
+  if (/^https?:\/\/.+\.torrent($|[?#])/i.test(candidateUrl)) {
+    // 单文件种子直接下载，多文件种子打开管理面板让用户勾选确认
+    await handleTorrentUrlSmart(candidateUrl, info.pageUrl || tab?.url || null);
+    return;
+  }
+
+  try {
+    await forwardToOffscreen<TaskView, AddTaskInput>("add_task", {
+      url: candidateUrl,
+      referrer: info.pageUrl || tab?.url || null,
+    });
+  } catch (err) {
+    // 若直加失败（如非支持的 URL），打开管理面板引导用户确认
+    await openManagerTab(candidateUrl);
+    console.warn("[tug-web] Context menu add_task error:", err);
+  }
+});
+
+// 监听并自动接管浏览器新下载
+chrome.downloads?.onCreated.addListener(async (item) => {
+  if (selfExportedDownloadIds.has(item.id)) {
+    return;
+  }
+  // 忽略历史已完成的下载项（浏览器启动时可能重放）
+  if (item.state && item.state !== "in_progress") {
+    return;
+  }
+
+  const settings = await loadCachedSettings();
+  const decision = shouldInterceptBrowserDownload(
+    {
+      url: item.url,
+      finalUrl: item.finalUrl,
+      filename: item.filename,
+      mime: item.mime,
+      totalBytes: item.totalBytes,
+      byExtensionId: item.byExtensionId,
+    },
+    settings,
+    chrome.runtime.id,
+  );
+
+  if (!decision.intercept) {
+    return;
+  }
+
+  const targetUrl = item.finalUrl || item.url;
+  const suggestedName = item.filename
+    ? guessFileNameFromUrl(item.filename)
+    : guessFileNameFromUrl(targetUrl);
+
+  if (decision.reason === "torrent_file") {
+    try {
+      await handleTorrentUrlSmart(targetUrl, item.referrer || null);
+      await chrome.downloads.cancel(item.id).catch(() => {});
+      await chrome.downloads.erase({ id: item.id }).catch(() => {});
+    } catch (err) {
+      console.warn("[tug-web] Intercept .torrent fallback:", err);
+    }
+    return;
+  }
+
+  try {
+    // 先在 Tug Web 创建任务，成功后再取消原浏览器下载，确保绝不丢失下载
+    await forwardToOffscreen<TaskView, AddTaskInput>("add_task", {
+      url: targetUrl,
+      fileName: suggestedName !== "download" ? suggestedName : null,
+      referrer: item.referrer || null,
+    });
+
+    await chrome.downloads.cancel(item.id).catch(() => {});
+    await chrome.downloads.erase({ id: item.id }).catch(() => {});
+  } catch (err) {
+    console.warn("[tug-web] Intercept fallback to browser download:", err);
+  }
+});
+
+// 监听 Offscreen 广播事件以更新扩展角标与发送完成通知
+const notifiedTaskStates = new Map<number, string>();
+
+chrome.runtime.onMessage.addListener((message: unknown) => {
+  if (
+    !message ||
+    typeof message !== "object" ||
+    (message as ExtensionBroadcastMessage).channel !== "tug-web-event"
+  ) {
+    return;
+  }
+
+  const { event } = message as ExtensionBroadcastMessage;
+  if (event.type === "settings") {
+    cachedSettings = event.settings;
+    settingsInitialized = true;
+    return;
+  }
+
+  if (event.type === "updated") {
+    const task = event.task;
+    const prevState = notifiedTaskStates.get(task.id);
+    notifiedTaskStates.set(task.id, task.state);
+
+    if (
+      cachedSettings.notifyOnComplete &&
+      prevState &&
+      prevState !== task.state &&
+      (task.state === "completed" || task.state === "failed")
+    ) {
+      chrome.notifications?.create(`tug-task-${task.id}-${task.state}`, {
+        type: "basic",
+        iconUrl: chrome.runtime.getURL("icons/icon-128.png"),
+        title: task.state === "completed" ? "Tug Web · 下载完成" : "Tug Web · 下载失败",
+        message: task.error ? `${task.name} (${task.error})` : task.name,
+      });
+    }
+  }
+
+  // 更新工具栏图标上的活跃任务数角标
+  void forwardToOffscreen<TaskView[]>("list_tasks")
+    .then((tasks) => {
+      const activeCount = tasks.filter(
+        (t) =>
+          t.state === "downloading" ||
+          t.state === "fetching_metadata" ||
+          t.state === "queued",
+      ).length;
+      chrome.action?.setBadgeBackgroundColor({ color: "#676728" });
+      chrome.action?.setBadgeText({
+        text: activeCount > 0 ? String(activeCount) : "",
+      });
+    })
+    .catch(() => {});
+});
+
+// 处理来自 Popup / Manager / Content Script / Offscreen 的 RPC 消息
+chrome.runtime.onMessage.addListener(
+  (message: unknown, _sender, sendResponse): boolean | undefined => {
+    if (
+      !message ||
+      typeof message !== "object" ||
+      (message as ExtensionRequest).channel !== "tug-web-rpc" ||
+      (message as ExtensionRequest).target !== "background"
+    ) {
+      return undefined;
+    }
+
+    const req = message as ExtensionRequest;
+    handleBackgroundCommand(req)
+      .then((data) => {
+        const res: ExtensionResponse = {
+          ok: true,
+          requestId: req.requestId,
+          data,
+        };
+        sendResponse(res);
+      })
+      .catch((err) => {
+        const res: ExtensionResponse = {
+          ok: false,
+          requestId: req.requestId,
+          error: {
+            code: "BACKGROUND_ERROR",
+            message: err instanceof Error ? err.message : String(err),
+            retryable: true,
+          },
+        };
+        sendResponse(res);
+      });
+
+    return true;
+  },
+);
+
+chrome.runtime.onInstalled.addListener(() => {
+  registerContextMenus();
+  void ensureOffscreenDocument().catch(() => {});
+  void loadCachedSettings(true).then((settings) => {
+    if (!settings.standaloneMode) {
+      void checkHelperHealth(500).then((st) => {
+        if (st.available) void ensureExtIdRegisteredOnce();
+      });
+    }
+  });
+});
+
+chrome.runtime.onStartup.addListener(() => {
+  registerContextMenus();
+  void ensureOffscreenDocument().catch(() => {});
+  void loadCachedSettings(true).then((settings) => {
+    if (!settings.standaloneMode) {
+      void checkHelperHealth(500).then((st) => {
+        if (st.available) void ensureExtIdRegisteredOnce();
+      });
+    }
+  });
+});
+
+// 定时保活检查（当有活动任务时确保 Offscreen 宿主存活）
+chrome.alarms?.create("tug-web-keepalive", { periodInMinutes: 0.4 });
+chrome.alarms?.onAlarm.addListener((alarm) => {
+  if (alarm.name === "tug-web-keepalive") {
+    void ensureOffscreenDocument().catch(() => {});
+    void loadCachedSettings().then((settings) => {
+      if (!settings.standaloneMode && !extIdRegisteredInSession) {
+        void checkHelperHealth(600).then((st) => {
+          if (st.available) {
+            void ensureExtIdRegisteredOnce();
+          }
+        });
+      }
+    });
+  }
+});

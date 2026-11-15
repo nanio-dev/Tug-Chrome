@@ -1,0 +1,26 @@
+{
+  "extName": {
+    "message": "Tug Web — 多线程与 BT/磁力下载器",
+    "description": "Extension name"
+  },
+  "extDescription": {
+    "message": "独立运行的浏览器下载器插件：支持 HTTP/HTTPS 多连接分段加速、断点续传、浏览器下载自动接管与 BitTorrent/磁力链接下载。",
+    "description": "Extension description"
+  },
+  "ctxDownloadLink": {
+    "message": "使用 Tug Web 下载此链接",
+    "description": "Context menu for links"
+  },
+  "ctxDownloadMedia": {
+    "message": "使用 Tug Web 下载此媒体",
+    "description": "Context menu for media"
+  },
+  "ctxDownloadSelection": {
+    "message": "使用 Tug Web 下载选中链接/磁力",
+    "description": "Context menu for selected text"
+  },
+  "ctxOpenManager": {
+    "message": "打开 Tug Web 下载管理面板",
+    "description": "Context menu to open manager"
+  }
+}
