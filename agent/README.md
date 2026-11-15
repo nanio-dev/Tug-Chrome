@@ -182,7 +182,7 @@ Invoke-RestMethod -Uri "http://127.0.0.1:16899/health"
 
 ## 安装、唤醒与退出
 
-先运行 agent/build.bat，再运行根目录 build.bat，并将源码与 agent/tug-agent.exe 一起推送。插件从 GitHub 固定链接附加 ?t=时间戳下载，完整缓存为 Blob，再交给浏览器保存；保存阶段不重复联网下载。安装文件仍名为 tug-agent.exe，不要求用户保留扩展 ID 文件名。
+后续 Agent 构建上传使用 agent/push.bat（命令行可加 --no-pause），脚本自动构建并通过 FTP 上传、回读校验；插件构建仍运行根目录 build.bat。插件从 https://tug.nanio.cc/downloads/tug-agent.exe 附加 ?t=时间戳下载，完整缓存为 Blob，再交给浏览器保存；保存阶段不重复联网下载。安装文件仍名为 tug-agent.exe，不要求用户保留扩展 ID 文件名。
 
 首次连接时插件通过 /register 静默提交扩展 ID，然后从 Native Messaging 获取控制凭据，无需打开协议授权页。/register 不要求凭据，但拒绝普通网页 Origin；文件、BT 和卸载等操作仍需凭据。其他有相应本机通信权限的扩展也能注册，这是开放注册的边界。
 

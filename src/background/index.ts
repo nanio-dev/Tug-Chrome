@@ -1,3 +1,4 @@
+import { AGENT_DOWNLOAD_URL } from "../shared/agent-package";
 import {
   extractDownloadCandidate,
   guessFileNameFromUrl,
@@ -473,7 +474,6 @@ async function ensureNativeHelperRunning(options?: {
   return { ...native, ...finalStatus, installed: finalStatus.installed || native.installed };
 }
 
-const AGENT_DOWNLOAD_URL = "https://raw.githubusercontent.com/nanio-dev/Tug-Web/main/agent/tug-agent.exe";
 const DIAG_LOGS_STORAGE_KEY = "tugWebDiagLogs";
 const MAX_DIAG_LOGS = 120;
 let diagLogsCache: string[] | null = null;
