@@ -105,11 +105,52 @@ it('registers a running Agent silently before retrieving Native Messaging creden
 it('recovers browser save completion after service worker suspension',async()=>{const h=await launchHarness();try{const worker=h.context.serviceWorkers()[0];await worker.evaluate(async()=>{await chrome.storage.session.set({tugAgentInstallSession:{state:{phase:'confirming_save',bytesReceived:10,totalBytes:10,downloadId:123}}});chrome.downloads.search=async()=>[{id:123,state:'complete',exists:true}];});const p=await h.openPage();assert.equal((await rpc(p,'get_agent_install_state')).phase,'need_manual_launch');}finally{await h.close();}});
 it('uninstall disables Agent mode and clears credentials so later UI refreshes cannot wake it',async()=>{
  await withBackground('ready',async({p,worker})=>{
-  await rpc(p,'ensure_native_helper',{allowProtocolFallback:false});
+  assert.equal((await rpc(p,'launch_downloaded_agent',{downloadId:123})).phase,'ready');
   await worker.evaluate(()=>{const original=fetch;globalThis.fetch=(url,init)=>String(url).endsWith('/uninstall')?Promise.resolve(Response.json({ok:true})):original(url,init);});
   assert.equal((await rpc(p,'uninstall_native_agent')).uninstalled,true);
   assert.equal((await rpc(p,'get_state_snapshot')).settings.standaloneMode,true);
   assert.equal(await worker.evaluate(async()=>(await chrome.storage.session.get('tugAgentSessionToken')).tugAgentSessionToken),undefined);
   assert.equal((await rpc(p,'ensure_native_helper')).standaloneMode,true);
+  assert.deepEqual(await rpc(p,'get_agent_install_state'),{phase:'idle',bytesReceived:0,totalBytes:0,downloadId:null});
+  assert.equal(await worker.evaluate(async()=>(await chrome.storage.session.get('tugAgentInstallSession')).tugAgentInstallSession.state.phase),'idle');
+  await worker.evaluate(()=>{
+   const original=fetch;globalThis.fetch=(url,init)=>String(url).startsWith('http://127.0.0.1:16899/')?Promise.reject(Error('Agent removed')):original(url,init);
+   chrome.runtime.connectNative=()=>{throw Error('Specified native messaging host not found.');};
+   const send=chrome.runtime.sendMessage.bind(chrome.runtime);
+   chrome.runtime.sendMessage=(message,callback)=>message.type==='download_agent_binary'?callback({ok:true,data:{blobUrl:'blob:chrome-extension://fresh-installer',totalBytes:1024}}):send(message,callback);
+  });
+  await rpc(p,'update_settings',{standaloneMode:false});
+  await rpc(p,'install_native_agent');
+  await waitUntil(async()=>(await rpc(p,'get_agent_install_state')).phase==='confirming_save');
+  assert.equal((await rpc(p,'get_agent_install_state')).downloadId,null);
  });
+});
+
+it('rechecks cached activation after enabling Agent mode and keeps the fresh installer dialog open',async()=>{
+ const h=await launchHarness();try{
+  const base=await h.openPage(),settings=(await rpc(base,'get_state_snapshot')).settings,p=await h.context.newPage();
+  await p.addInitScript(({settings})=>{
+   let current={...settings,standaloneMode:true,locale:'en-US'},phase='ready';window.installCalls=0;window.observedReady=false;
+   new MutationObserver(()=>{if(document.querySelector('.modal-body .ok'))window.observedReady=true;}).observe(document,{subtree:true,childList:true});
+   chrome.runtime.sendMessage=async m=>{let data={};
+    if(m.type==='get_state_snapshot')data={settings:current,tasks:[]};
+    else if(m.type==='update_settings'){current={...current,...m.payload};data=current;}
+    else if(m.type==='get_native_helper_status'||m.type==='ensure_native_helper')data={available:false};
+    else if(m.type==='get_agent_install_state')data={phase,bytesReceived:10,totalBytes:10,downloadId:phase==='ready'?123:null};
+    else if(m.type==='install_native_agent'){window.installCalls++;await new Promise(r=>setTimeout(r,150));phase='confirming_save';data={phase,bytesReceived:10,totalBytes:10,downloadId:null};}
+    return{ok:true,data};
+   };
+  },{settings});
+  await p.goto(h.origin+'/popup.html');
+  await p.getByRole('button',{name:'Browser mode',exact:true}).click();
+  await p.locator('.popup-agent').click();
+  await p.locator('.modal-foot .btn-primary').waitFor();
+  assert.equal(await p.evaluate(()=>window.installCalls),1);
+  assert.equal(await p.evaluate(()=>window.observedReady),false);
+  await p.locator('.modal-head button').click();
+  await p.locator('.popup-agent').click();
+  await p.locator('.modal-foot .btn-primary').waitFor();
+  assert.equal(await p.evaluate(()=>window.observedReady),false);
+  assert.equal(await p.locator('.modal-backdrop').count(),1);
+ }finally{await h.close();}
 });

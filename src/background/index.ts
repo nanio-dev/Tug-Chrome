@@ -548,6 +548,12 @@ function setAgentInstallState(next: AgentInstallState): void {
   const saved = { state: { ...next }, blobUrl: pendingAgentBlobUrl };
   installStateSave = installStateSave.catch(() => {}).then(() => chrome.storage.session.set({ [INSTALL_SESSION_KEY]: saved }));
 }
+function resetAgentInstallation(): void {
+  installGeneration++;
+  pendingAgentBlobUrl = null;
+  setAgentReadyBadge(false);
+  setAgentInstallState({ phase: "idle", bytesReceived: 0, totalBytes: 0, downloadId: null });
+}
 function loadAgentInstallState(): Promise<void> {
   if (!installStateLoading) installStateLoading = (async () => {
     const saved = (await chrome.storage.session.get(INSTALL_SESSION_KEY))[INSTALL_SESSION_KEY] as { state?: AgentInstallState; blobUrl?: string } | undefined;
@@ -562,6 +568,7 @@ function loadAgentInstallState(): Promise<void> {
 }
 
 async function launchDownloadedAgentById(downloadId: number): Promise<AgentInstallState> {
+  const attempt = installGeneration;
   logDiag("activate", `launching from UI gesture for downloadId=${downloadId}`);
   setAgentInstallState({
     ...agentInstallState,
@@ -570,6 +577,7 @@ async function launchDownloadedAgentById(downloadId: number): Promise<AgentInsta
     message: undefined,
   });
   const status = await waitForAgentHealthAndRegister(15000);
+  if (attempt !== installGeneration) return agentInstallState;
   if (status.available) {
     logDiag("activate", `agent health OK and registered for downloadId=${downloadId}`);
     setAgentInstallState({ ...agentInstallState, phase: "ready", downloadId });
@@ -706,6 +714,7 @@ async function startInstallNativeAgent(): Promise<AgentInstallState> {
 
   // 若本机已安装且能唤醒，直接激活完成
   const existing = await ensureNativeHelperRunning({ allowProtocolFallback: false });
+  if (attempt !== installGeneration) return agentInstallState;
   if (existing.available) {
     setAgentInstallState({
       phase: "ready",
@@ -878,15 +887,7 @@ async function handleBackgroundCommand(req: ExtensionRequest): Promise<unknown> 
       return launchDownloadedAgentById(payload.downloadId);
     }
     case "reset_agent_install_state":
-      installGeneration++;
-      pendingAgentBlobUrl = null;
-      setAgentReadyBadge(false);
-      setAgentInstallState({
-        phase: "idle",
-        bytesReceived: 0,
-        totalBytes: 0,
-        downloadId: null,
-      });
+      resetAgentInstallation();
       return agentInstallState;
     case "uninstall_native_agent": {
       let status = await checkHelperHealth(500);
@@ -902,6 +903,8 @@ async function handleBackgroundCommand(req: ExtensionRequest): Promise<unknown> 
         if (!ok) throw new Error("Agent 未确认卸载完成");
         disconnectHelperNative();
         await setHelperCredentials(null);
+        resetAgentInstallation();
+        await installStateSave;
         cachedSettings = await forwardToOffscreen<Settings>("update_settings", { standaloneMode: true });
         extIdRegisteredInSession = false;
         setAgentReadyBadge(false);

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   exportDownloadedAgent,
   ensureNativeHelper,
@@ -34,11 +34,12 @@ export function AgentInstallModal({ open, compact = false, onClose, onActivated 
     finally { onCloseRef.current(); }
   };
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     visible.current = open;
     if (!open) return;
     let cancelled = false;
     let timer: number | undefined;
+    setState({ phase: "checking", bytesReceived: 0, totalBytes: 0, downloadId: null });
     activated.current = false;
     actionFailed.current = false;
     let lastProbe = 0;
@@ -46,7 +47,8 @@ export function AgentInstallModal({ open, compact = false, onClose, onActivated 
       try {
         let next = await getAgentInstallState();
         if (cancelled) return;
-        if (initial && next.phase === "idle") next = await installNativeAgent();
+        // A previous successful installation is history, not a live connection check.
+        if (initial && (next.phase === "idle" || next.phase === "ready")) next = await installNativeAgent();
         if (cancelled) return;
         if (next.phase === "need_pairing" && !actionActive.current && Date.now() - lastProbe >= 2000) {
           lastProbe = Date.now();
