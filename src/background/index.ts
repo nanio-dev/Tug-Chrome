@@ -448,6 +448,8 @@ async function ensureNativeHelperRunning(options?: {
     return { ...initial, installed: true };
   }
 
+  // No external-protocol prompt is needed to bootstrap a running Agent.
+  if (initial.pairingRequired) await registerExtIdWithHelper(chrome.runtime.id);
   const native = await connectHelperNative(8000, message => logDiag("probe", message));
   if (native.available) {
     setAgentReadyBadge(false);
@@ -598,7 +600,7 @@ async function exportDownloadedAgent(): Promise<AgentInstallState> {
   }
 
   try {
-    const installerName = `tug-agent-${chrome.runtime.id}.exe`;
+    const installerName = "tug-agent.exe";
     pendingBlobExports.set(blobUrl, installerName);
     const downloadId = await chrome.downloads.download({
       url: blobUrl,
@@ -619,7 +621,7 @@ async function exportDownloadedAgent(): Promise<AgentInstallState> {
         await new Promise((r) => setTimeout(r, 150));
         const items = await chrome.downloads.search({ id: downloadId }).catch(() => []);
         const item = items[0];
-        if (agentInstallState.downloadId !== downloadId) return;
+        if (agentInstallState.downloadId !== downloadId || agentInstallState.phase !== "confirming_save") return;
         if (!item) {
           logDiag("activate", `downloadId=${downloadId} search returned empty`);
           setAgentInstallState({
@@ -662,6 +664,9 @@ async function exportDownloadedAgent(): Promise<AgentInstallState> {
           return;
         }
       }
+      if (agentInstallState.downloadId === downloadId && agentInstallState.phase === "confirming_save") {
+        setAgentInstallState({ ...agentInstallState, phase: "error", message: "等待保存超时，请重试；已缓存安装包无需重新下载" });
+      }
     })();
 
     return agentInstallState;
@@ -678,6 +683,10 @@ async function exportDownloadedAgent(): Promise<AgentInstallState> {
 }
 
 async function startInstallNativeAgent(): Promise<AgentInstallState> {
+  if (pendingAgentBlobUrl && agentInstallState.phase === "error") {
+    setAgentInstallState({ ...agentInstallState, phase: "confirming_save", downloadId: null, message: undefined });
+    return agentInstallState;
+  }
   if (["checking", "downloading", "confirming_save", "launching", "waiting_ready", "need_manual_launch"].includes(agentInstallState.phase)) return agentInstallState;
   const attempt = ++installGeneration;
   pendingAgentBlobUrl = null;
@@ -832,8 +841,14 @@ async function handleBackgroundCommand(req: ExtensionRequest): Promise<unknown> 
     }
     case "install_native_agent":
       return startInstallNativeAgent();
-    case "get_agent_install_state":
+    case "get_agent_install_state": {
+      if (agentInstallState.phase === "confirming_save" && agentInstallState.downloadId !== null) {
+        const item = (await chrome.downloads.search({ id: agentInstallState.downloadId }))[0];
+        if (item?.state === "complete") setAgentInstallState({ ...agentInstallState, phase: "need_manual_launch" });
+        else if (!item || item.state === "interrupted") setAgentInstallState({ ...agentInstallState, phase: "error", message: item?.error || "保存未完成，请重试" });
+      }
       return agentInstallState;
+    }
     case "report_agent_install_progress": {
       const p = req.payload as { bytesReceived: number; totalBytes: number };
       if (agentInstallState.phase === "downloading") {

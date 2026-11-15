@@ -1,3 +1,4 @@
+import { cacheAgentPackage } from "../shared/agent-package";
 import { TaskManager } from "../engine/core/manager";
 import { exportBlobViaHelper } from "../engine/torrent/native-helper";
 import {
@@ -189,50 +190,9 @@ async function handleOffscreenCommand(
       return manager.updateSettings(req.payload as Partial<Settings>);
     case "download_agent_binary": {
       const { url } = req.payload as { url: string };
-      const packageUrl = new URL(url);
-      if (packageUrl.origin !== "https://raw.githubusercontent.com" || packageUrl.pathname !== "/nanio-dev/Tug-Web/main/agent/tug-agent.exe") {
-        throw new Error("Invalid Agent download URL");
-      }
-      const res = await fetch(url, { cache: "no-store" });
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status} ${res.statusText}`);
-      }
-      const totalBytes = Number(res.headers.get("content-length") || "0") || 0;
-      let bytesReceived = 0;
-      let lastReportAt = 0;
-
-      if (res.body) {
-        const reader = res.body.getReader();
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          if (value) {
-            bytesReceived += value.byteLength;
-            const now = Date.now();
-            if (now - lastReportAt >= 120) {
-              lastReportAt = now;
-              void sendToBackground("report_agent_install_progress", {
-                bytesReceived,
-                totalBytes,
-              }).catch(() => {});
-            }
-          }
-        }
-      } else {
-        const buf = new Uint8Array(await res.arrayBuffer());
-        bytesReceived = buf.byteLength;
-      }
-
-      const finalTotal = totalBytes > 0 ? totalBytes : bytesReceived;
-      void sendToBackground("report_agent_install_progress", {
-        bytesReceived,
-        totalBytes: finalTotal,
-      }).catch(() => {});
-
-      // The fixed release resource survives worker suspension and delayed confirmation.
-      // Avoid another in-memory binary copy and a 60-second blob URL expiry.
-      const blobUrl = url;
-      return { blobUrl, totalBytes: finalTotal };
+      return cacheAgentPackage(url, (bytesReceived, totalBytes) => {
+        void sendToBackground("report_agent_install_progress", { bytesReceived, totalBytes }).catch(() => {});
+      });
     }
     default:
       throw new Error(`Unsupported offscreen command: ${req.type}`);

@@ -99,8 +99,12 @@ pub async fn authorize(
         .get(TOKEN_HEADER)
         .and_then(|h| h.to_str().ok());
     let health = request.uri().path() == "/health" && request.method() == Method::GET;
-    let denied =
-        !preflight && (!health || supplied.is_some()) && !supplied.is_some_and(|t| auth.accepts(t));
+    // Registration is open to extension origins, but never to arbitrary web pages.
+    let registration = request.uri().path() == "/register" && request.method() == Method::POST;
+    let denied = !preflight
+        && !registration
+        && (!health || supplied.is_some())
+        && !supplied.is_some_and(|t| auth.accepts(t));
     let mut response = if denied {
         (
             StatusCode::UNAUTHORIZED,
@@ -165,6 +169,30 @@ mod tests {
                 Arc::new(Authorization::new("test-secret".into())),
                 authorize,
             ))
+    }
+    #[tokio::test]
+    async fn allows_registration_without_a_token_but_still_denies_web_origins() {
+        for (origin, expected) in [
+            (
+                "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                StatusCode::OK,
+            ),
+            ("https://evil.test", StatusCode::FORBIDDEN),
+        ] {
+            let router = Router::new()
+                .route("/register", axum::routing::post(|| async { "ok" }))
+                .layer(middleware::from_fn_with_state(
+                    Arc::new(Authorization::new("secret".into())),
+                    authorize,
+                ));
+            let req = Request::builder()
+                .method("POST")
+                .uri("/register")
+                .header("Origin", origin)
+                .body(Body::empty())
+                .unwrap();
+            assert_eq!(router.oneshot(req).await.unwrap().status(), expected);
+        }
     }
     #[tokio::test]
     async fn denies_web_pages_missing_tokens_and_wrong_tokens() {

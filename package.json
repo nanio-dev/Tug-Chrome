@@ -11,7 +11,7 @@
     "build": "tsc --noEmit && vite build && node scripts/build-extension.mjs",
     "test": "node --import ./tests/register-loader.mjs --test tests/*.test.ts",
     "test:browser": "npm run build && node --test tests/browser/*.test.mjs",
-    "test:agent": "cargo build --manifest-path agent/Cargo.toml --offline && node --test tests/agent-integration.test.mjs",
+    "test:agent": "cargo build --manifest-path agent/Cargo.toml --offline && node --test tests/agent-*.test.mjs",
     "bench:http": "npm run build && node scripts/benchmark-http.mjs",
     "bench:agent-http": "npm run build && node scripts/benchmark-agent-http.mjs"
   },

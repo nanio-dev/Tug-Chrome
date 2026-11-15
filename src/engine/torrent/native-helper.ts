@@ -195,7 +195,8 @@ export async function registerExtIdWithHelper(extId: string): Promise<boolean> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 2000);
   try {
-    const resp = await fetchHelper(`${NATIVE_HELPER_BASE_URL}/register`, {
+    const resp = await fetch(`${NATIVE_HELPER_BASE_URL}/register`, {
+      redirect: "error",
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ extId }),

@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  activateNativeHelperProtocol,
   exportDownloadedAgent,
   ensureNativeHelper,
   getAgentInstallState,
@@ -21,7 +20,6 @@ export function AgentInstallModal({ open, compact = false, onClose, onActivated 
   const { t } = useI18n();
   const [state, setState] = useState<AgentInstallState>({ phase: "checking", bytesReceived: 0, totalBytes: 0, downloadId: null });
   const [busy, setBusy] = useState(false);
-  const [needsAuthorization, setNeedsAuthorization] = useState(false);
   const actionActive = useRef(false);
   const actionFailed = useRef(false);
   const visible = useRef(open);
@@ -43,7 +41,6 @@ export function AgentInstallModal({ open, compact = false, onClose, onActivated 
     let timer: number | undefined;
     activated.current = false;
     actionFailed.current = false;
-    setNeedsAuthorization(false);
     let lastProbe = 0;
     const poll = async (initial = false) => {
       try {
@@ -103,16 +100,7 @@ export function AgentInstallModal({ open, compact = false, onClose, onActivated 
     return launchDownloadedAgent(id);
   });
   const handlePair = () => run(async () => {
-    if (!needsAuthorization) {
-      const status = await ensureNativeHelper(false);
-      if (status.available) return { ...state, phase: "ready", message: undefined };
-      if (status.updateRequired) throw new Error(t("agentInstall.updateRequired"));
-      setNeedsAuthorization(true);
-      return { ...state, phase: "need_pairing" };
-    }
-    // The fallback is a separate user gesture, only for unregistered browser IDs.
-    const tab = await chrome.tabs.create({ url: `tug-agent://register?extId=${chrome.runtime.id}`, active: true });
-    const status = await activateNativeHelperProtocol(tab.id);
+    const status = await ensureNativeHelper(false);
     if (!status.available) throw new Error(t(status.updateRequired ? "agentInstall.updateRequired" : "agentInstall.pairFailed"));
     return { ...state, phase: "ready", message: undefined };
   });
@@ -168,8 +156,11 @@ export function AgentInstallModal({ open, compact = false, onClose, onActivated 
             )}
             {(state.phase === "launching" || state.phase === "waiting_ready") &&
               t("agentInstall.launching")}
-            {state.phase === "need_manual_launch" && t("agentInstall.needManual")}
-            {state.phase === "need_pairing" && t(needsAuthorization ? "agentInstall.needAuthorization" : "agentInstall.needPairing")}
+            {state.phase === "confirming_save" && state.downloadId !== null && (
+            <button type="button" className="btn btn-sm" disabled={busy} onClick={() => void run(getAgentInstallState)}>{t("agentInstall.checkSave")}</button>
+          )}
+          {state.phase === "need_manual_launch" && t("agentInstall.needManual")}
+            {state.phase === "need_pairing" && t("agentInstall.needPairing")}
             {state.phase === "ready" && (
               <span className="ok">● {t("agentInstall.ready")}</span>
             )}
@@ -248,7 +239,7 @@ export function AgentInstallModal({ open, compact = false, onClose, onActivated 
             </button>
           )}
           {state.phase === "need_pairing" && (
-            <button type="button" className="btn btn-sm btn-primary" disabled={busy} onClick={() => void handlePair()}>{t(needsAuthorization ? "agentInstall.authorizeBtn" : "agentInstall.pairBtn")}</button>
+            <button type="button" className="btn btn-sm btn-primary" disabled={busy} onClick={() => void handlePair()}>{t("agentInstall.pairBtn")}</button>
           )}
           {state.phase === "error" && (
             <button

@@ -113,7 +113,6 @@ pub async fn handle_options() -> Response {
 }
 
 pub async fn handle_health(State(state): State<Arc<AppState>>) -> Response {
-    state.touch();
     let count = state.entries.read().await.len();
     let body = serde_json::json!({
         "ok": true,

@@ -336,21 +336,13 @@ pub fn install_and_register(ext_id: Option<&str>, force_registry: bool) -> anyho
     Ok(manifest_path)
 }
 
-/// The browser saves the fixed package under a per-extension installer name.
-fn extension_id_from_installer(path: &std::path::Path) -> Option<String> {
-    let id = path.file_stem()?.to_str()?.strip_prefix("tug-agent-")?;
-    crate::auth::valid_extension_id(id).then(|| id.to_owned())
-}
-
 /// 解析命令行参数并执行必要的注册表/清单绑定。
 /// 返回 `(is_native_messaging, install_only)`。
 pub fn parse_cli_and_register() -> anyhow::Result<(bool, bool)> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut is_native_messaging = false;
     let mut install_only = false;
-    let mut ext_id = std::env::current_exe()
-        .ok()
-        .and_then(|p| extension_id_from_installer(&p));
+    let mut ext_id: Option<String> = None;
     let mut migrated_from: Option<PathBuf> = None;
 
     let mut i = 0;
@@ -390,7 +382,9 @@ pub fn parse_cli_and_register() -> anyhow::Result<(bool, bool)> {
         });
     }
 
-    install_and_register(ext_id.as_deref(), install_only)?;
+    if !args.iter().any(|a| a == "--isolated-install") {
+        install_and_register(ext_id.as_deref(), install_only)?;
+    }
     Ok((is_native_messaging, install_only))
 }
 
@@ -401,67 +395,120 @@ fn resolve_persistent_agent_dir() -> Option<PathBuf> {
 
 /// 若当前是从下载目录等临时位置初次运行，则将自身复制到 `%LOCALAPPDATA%\TugAgent\tug-agent.exe`
 /// 并拉起新实例（无脚本、无 taskkill），随后当前进程正常退出。返回 `true` 表示已触发迁移。
-pub fn maybe_migrate_to_app_dir() -> bool {
-    #[cfg(not(target_os = "windows"))]
+pub fn maybe_migrate_to_app_dir() -> anyhow::Result<bool> {
+    #[cfg(not(windows))]
     {
-        return false;
+        Ok(false)
     }
-
-    #[cfg(target_os = "windows")]
+    #[cfg(windows)]
     {
         let args: Vec<String> = std::env::args().skip(1).collect();
+        // Native Messaging is a wake/handshake, not an install or replacement.
         if args.iter().any(|a| {
-            a.starts_with("chrome-extension://") || a == "--migrated-from" || a == "--no-migrate"
+            a.starts_with("chrome-extension://")
+                || a == "--migrated-from"
+                || a == "--daemon"
+                || a == "--no-migrate"
         }) {
-            return false;
+            return Ok(false);
         }
-
-        let Ok(current_exe) = std::env::current_exe() else {
-            return false;
-        };
-        let Some(current_dir) = current_exe.parent() else {
-            return false;
-        };
-
-        // 开发目录（旁边有 Cargo.toml 或位于 target\debug / target\release）不迁移
-        let current_lower = current_exe.to_string_lossy().to_ascii_lowercase();
-        if current_dir.join("Cargo.toml").exists()
-            || current_lower.contains(r"\target\debug\")
-            || current_lower.contains(r"\target\release\")
+        let current = std::env::current_exe()?;
+        stop_old_agents()?;
+        let target_dir =
+            resolve_persistent_agent_dir().ok_or_else(|| anyhow!("LOCALAPPDATA is missing"))?;
+        std::fs::create_dir_all(&target_dir)?;
+        let target = target_dir.join("tug-agent.exe");
+        if current
+            .to_string_lossy()
+            .eq_ignore_ascii_case(&target.to_string_lossy())
         {
-            return false;
+            return Ok(false);
         }
-
-        let Some(target_dir) = resolve_persistent_agent_dir() else {
-            return false;
-        };
-        let target_exe = target_dir.join("tug-agent.exe");
-        if current_lower == target_exe.to_string_lossy().to_ascii_lowercase() {
-            return false;
-        }
-
-        if std::fs::create_dir_all(&target_dir).is_err() {
-            return false;
-        }
-        if std::fs::copy(&current_exe, &target_exe).is_err() {
-            return false;
-        }
-
-        let mut cmd = Command::new(&target_exe);
-        let installer_id = extension_id_from_installer(&current_exe);
-        for arg in args {
-            cmd.arg(arg);
-        }
-        if let Some(id) = installer_id {
-            cmd.arg("--ext-id").arg(id);
-        }
-        cmd.arg("--migrated-from").arg(&current_exe);
+        // Stop old processes first: Windows cannot overwrite a running image.
+        std::fs::copy(&current, &target).context("无法将 Agent 安装到 AppData")?;
+        let mut cmd = Command::new(&target);
+        cmd.args(&args);
+        cmd.arg("--migrated-from").arg(&current);
         cmd.creation_flags(CREATE_NO_WINDOW);
-        if cmd.spawn().is_ok() {
-            return true;
-        }
-        false
+        cmd.spawn().context("无法启动 AppData 中的 Agent")?;
+        Ok(true)
     }
+}
+
+#[cfg(windows)]
+fn stop_old_agents() -> anyhow::Result<()> {
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
+        TH32CS_SNAPPROCESS,
+    };
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
+        QueryFullProcessImageNameW, TerminateProcess, WaitForSingleObject,
+    };
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        anyhow::ensure!(
+            snapshot != INVALID_HANDLE_VALUE,
+            "Cannot enumerate Agent processes"
+        );
+        let mut known = vec![
+            std::env::current_exe()?,
+            resolve_persistent_agent_dir()
+                .ok_or_else(|| anyhow!("Missing LOCALAPPDATA"))?
+                .join("tug-agent.exe"),
+        ];
+        if !std::env::args().any(|a| a == "--isolated-install") {
+            for browser in BROWSER_TARGETS {
+                let key = format!(r"{}\{HOST_NAME}", browser.nm_subkey);
+                if let Some(manifest) = crate::windows_registry::string(&key, "")
+                    && let Ok(text) = std::fs::read_to_string(manifest)
+                    && let Ok(value) = serde_json::from_str::<serde_json::Value>(&text)
+                    && let Some(path) = value.get("path").and_then(|v| v.as_str())
+                {
+                    known.push(PathBuf::from(path));
+                }
+            }
+        }
+        let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+        let mut found = Process32FirstW(snapshot, &mut entry);
+        while found != 0 {
+            let name = String::from_utf16_lossy(
+                &entry.szExeFile[..entry
+                    .szExeFile
+                    .iter()
+                    .position(|&c| c == 0)
+                    .unwrap_or(entry.szExeFile.len())],
+            );
+            if entry.th32ProcessID != std::process::id()
+                && name.eq_ignore_ascii_case("tug-agent.exe")
+            {
+                let process = OpenProcess(
+                    PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE | PROCESS_SYNCHRONIZE,
+                    0,
+                    entry.th32ProcessID,
+                );
+                if !process.is_null() {
+                    let mut path = vec![0u16; 32768];
+                    let mut length = path.len() as u32;
+                    if QueryFullProcessImageNameW(process, 0, path.as_mut_ptr(), &mut length) != 0 {
+                        let image = String::from_utf16_lossy(&path[..length as usize]);
+                        let known_agent = known
+                            .iter()
+                            .any(|p| p.to_string_lossy().eq_ignore_ascii_case(&image));
+                        if known_agent && TerminateProcess(process, 0) != 0 {
+                            WaitForSingleObject(process, 5000);
+                        }
+                    }
+                    CloseHandle(process);
+                }
+            }
+            found = Process32NextW(snapshot, &mut entry);
+        }
+        CloseHandle(snapshot);
+    }
+    Ok(())
 }
 
 /// 彻底卸载 Tug Agent：清理注册表、清单文件、临时目录，并在退出后删除常驻目录中的自身文件。
@@ -509,30 +556,6 @@ pub fn uninstall_self() {
                 cmd.creation_flags(CREATE_NO_WINDOW);
                 let _ = cmd.spawn();
             }
-        }
-    }
-}
-
-#[cfg(test)]
-mod installer_tests {
-    use super::*;
-    #[test]
-    fn binds_only_a_valid_extension_id_from_the_installer_name() {
-        let id = "abcdefghijklmnopabcdefghijklmnop";
-        assert_eq!(
-            extension_id_from_installer(std::path::Path::new(&format!("tug-agent-{id}.exe"))),
-            Some(id.to_owned())
-        );
-        for name in [
-            "tug-agent.exe",
-            "tug-agent-evil.exe",
-            "tug-agent-abcdefghijklmnopabcdefghijklmnop (1).exe",
-            "other-abcdefghijklmnopabcdefghijklmnop.exe",
-        ] {
-            assert_eq!(
-                extension_id_from_installer(std::path::Path::new(name)),
-                None
-            );
         }
     }
 }

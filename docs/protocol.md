@@ -59,3 +59,7 @@ Native Messaging 帧仍为 4 字节小端长度 + JSON。ready/pong 帧额外携
 | `POST /uninstall` | 已授权卸载 |
 
 旧协议 Agent 被标记为 updateRequired，不退回无授权调用。首次安装/扩展 ID 变更可通过安装器或自定义协议绑定，之后使用 Native Messaging。
+
+## 注册与生命周期更新
+
+/register 为开放注册入口，不要求能力凭据，允许合法扩展来源和无 Origin 的本机调用，拒绝普通网页来源；控制接口继续鉴权。注册后通过 Native Messaging 取得凭据，正常连接不依赖自定义协议页面。手动启动时替换旧实例并迁移到 AppData，普通握手不重启已有实例。健康查询与 Native Messaging 连接不阻止无任务空闲 120 秒退出。

@@ -8,14 +8,15 @@ async function withBackground(mode,run){
  await worker.evaluate(({mode})=>{
   const original=globalThis.fetch;
   globalThis.nativeCalls={connects:0,disconnects:0};
+  let registered=false;
   globalThis.fetch=async(url,init)=>{
    if(String(url).startsWith('http://127.0.0.1:16899/health'))return Response.json(mode==='old'?{ok:true,service:'tug-agent'}:{ok:true,service:'tug-agent',protocolVersion:2,authRequired:true});
-   if(String(url).startsWith('http://127.0.0.1:16899/register'))return Response.json({ok:true});
+   if(String(url).startsWith('http://127.0.0.1:16899/register')){registered=true;return Response.json({ok:true});}
    return original(url,init);
   };
   chrome.runtime.connectNative=()=>{
    globalThis.nativeCalls.connects++;
-   if(mode==='unpaired')throw Error('Access to native messaging host is forbidden');
+   if(mode==='unpaired'||(mode==='autoregister'&&!registered))throw Error('Access to native messaging host is forbidden');
    const callbacks=[];
    return {onMessage:{addListener:fn=>callbacks.push(fn)},onDisconnect:{addListener:()=>{}},disconnect:()=>globalThis.nativeCalls.disconnects++,postMessage:()=>queueMicrotask(()=>callbacks.forEach(fn=>fn(mode==='old'?{ok:true,type:'ready'}:{ok:true,protocolVersion:2,token:'ab'.repeat(32)})))};
   };
@@ -45,7 +46,7 @@ it('restores a pending pairing step from session storage in a fresh service work
  const p=await h.openPage();assert.equal((await rpc(p,'get_agent_install_state')).phase,'need_pairing');
  }finally{await h.close();}
 });
-it('opens pairing from an explicit UI action and does not download another binary',async()=>{
+it('keeps connection failures retryable without opening a protocol page',async()=>{
  const h=await launchHarness();try{
  const base=await h.openPage();const settings=(await rpc(base,'get_state_snapshot')).settings;const p=await h.context.newPage();
  await p.addInitScript(({settings})=>{
@@ -59,17 +60,17 @@ it('opens pairing from an explicit UI action and does not download another binar
    return{ok:true,data};
   };
  },{settings});
- await p.goto(h.origin+'/popup.html');await p.getByRole('button',{name:'Connect Agent',exact:true}).click();await p.getByRole('button',{name:'Authorize this browser',exact:true}).click();await p.locator('.modal-backdrop').waitFor({state:'hidden'});
- const calls=await p.evaluate(()=>window.pairingCalls);assert.ok(calls.some(v=>v.startsWith('tug-agent://register?extId=')));assert.ok(calls.includes('activate_native_helper_protocol'));assert.ok(!calls.includes('install_native_agent'));
+ await p.goto(h.origin+'/popup.html');await p.getByRole('button',{name:'Connect Agent',exact:true}).click();await p.getByRole('button',{name:'Retry',exact:true}).waitFor();
+ const calls=await p.evaluate(()=>window.pairingCalls);assert.ok(!calls.some(v=>v.startsWith('tug-agent://register?extId=')));assert.ok(!calls.includes('activate_native_helper_protocol'));assert.ok(!calls.includes('install_native_agent'));
  }finally{await h.close();}
 });
 
-it('uses the fixed GitHub URL with a timestamp and binds the installer filename to the browser',async()=>{
+it('saves the already cached installer without downloading its remote URL again',async()=>{
  await withBackground('old',async({h,p,worker})=>{
   await worker.evaluate(()=>{
    const send=chrome.runtime.sendMessage.bind(chrome.runtime);
    chrome.runtime.sendMessage=(message,callback)=>{
-    if(message.type==='download_agent_binary') { callback({ok:true,data:{blobUrl:message.payload.url,totalBytes:7*1024*1024}});return; }
+    if(message.type==='download_agent_binary') { callback({ok:true,data:{blobUrl:'blob:chrome-extension://cached-package',totalBytes:7*1024*1024}});return; }
     return send(message,callback);
    };
    chrome.downloads.download=async options=>{globalThis.installerOptions=options;return 9001;};
@@ -79,8 +80,8 @@ it('uses the fixed GitHub URL with a timestamp and binds the installer filename 
   const state=await rpc(p,'get_agent_install_state');assert.ok(state.totalBytes>1024*1024);
   await rpc(p,'export_downloaded_agent');
   const options=await worker.evaluate(()=>globalThis.installerOptions);
-  assert.match(options.url,/^https:\/\/raw.githubusercontent.com\/nanio-dev\/Tug-Web\/main\/agent\/tug-agent.exe\?t=\d+$/);
-  assert.equal(options.filename,'tug-agent-'+new URL(h.origin).hostname+'.exe');
+  assert.equal(options.url,'blob:chrome-extension://cached-package');
+  assert.equal(options.filename,'tug-agent.exe');
  });
 });
 
@@ -98,3 +99,7 @@ it('silently reconnects an already paired browser and automatically closes the a
  await p.goto(h.origin+'/popup.html');await p.getByText('Agent connected',{exact:true}).waitFor();await p.locator('.modal-backdrop').waitFor({state:'hidden'});assert.equal(await p.evaluate(()=>window.protocolOpened),false);
  }finally{await h.close();}
 });
+
+it('registers a running Agent silently before retrieving Native Messaging credentials',async()=>{await withBackground('autoregister',async({p})=>{assert.equal((await rpc(p,'launch_downloaded_agent',{downloadId:12})).phase,'ready');});});
+
+it('recovers browser save completion after service worker suspension',async()=>{const h=await launchHarness();try{const worker=h.context.serviceWorkers()[0];await worker.evaluate(async()=>{await chrome.storage.session.set({tugAgentInstallSession:{state:{phase:'confirming_save',bytesReceived:10,totalBytes:10,downloadId:123}}});chrome.downloads.search=async()=>[{id:123,state:'complete',exists:true}];});const p=await h.openPage();assert.equal((await rpc(p,'get_agent_install_state')).phase,'need_manual_launch');}finally{await h.close();}});

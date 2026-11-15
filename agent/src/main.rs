@@ -93,7 +93,8 @@ async fn run() -> anyhow::Result<()> {
     // A foreground service mode enables isolated integration tests/development,
     // without installing a host, migrating the binary, or changing the registry.
     let serve_only = args.iter().any(|a| a == "--serve-only");
-    if !serve_only && maybe_migrate_to_app_dir() {
+    let isolated_install = args.iter().any(|a| a == "--isolated-install");
+    if !serve_only && maybe_migrate_to_app_dir()? {
         return Ok(());
     }
     let (is_native_messaging, install_only) = if serve_only {
@@ -114,7 +115,7 @@ async fn run() -> anyhow::Result<()> {
     let token = auth::native_token()?;
 
     // 检查 127.0.0.1:16899 是否已经有正在运行的 helper 实例
-    let port = if serve_only {
+    let port = if serve_only || isolated_install {
         args.iter()
             .find_map(|a| a.strip_prefix("--port="))
             .map(str::parse::<u16>)
@@ -150,7 +151,7 @@ async fn run() -> anyhow::Result<()> {
 
     let state = Arc::new(AppState {
         bt_session: OnceCell::new(),
-        bt_networking: !serve_only,
+        bt_networking: !serve_only && !isolated_install,
         stage_root: stage_root.clone(),
         entries: RwLock::new(HashMap::new()),
         last_activity_secs: AtomicU64::new(now_secs()),
@@ -163,11 +164,19 @@ async fn run() -> anyhow::Result<()> {
         spawn_native_messaging_stdio_loop(state.clone());
     }
 
+    let idle_timeout = if serve_only || isolated_install {
+        args.iter()
+            .find_map(|a| a.strip_prefix("--idle-timeout="))
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(IDLE_TIMEOUT_SECS)
+    } else {
+        IDLE_TIMEOUT_SECS
+    };
     // 空闲自动退出巡检协程：当无活跃种子且超过 120 秒无请求时自动清理临时目录并退出进程
     let idle_state = state.clone();
     tokio::spawn(async move {
         loop {
-            tokio::time::sleep(Duration::from_secs(15)).await;
+            tokio::time::sleep(Duration::from_secs(1)).await;
             let active_count = idle_state.entries.read().await.len();
             if active_count > 0 || idle_state.active_operations.load(Ordering::Relaxed) > 0 {
                 idle_state.touch();
@@ -175,9 +184,7 @@ async fn run() -> anyhow::Result<()> {
             }
             let elapsed =
                 now_secs().saturating_sub(idle_state.last_activity_secs.load(Ordering::Relaxed));
-            if elapsed >= IDLE_TIMEOUT_SECS
-                && !idle_state.native_stdin_active.load(Ordering::Relaxed)
-            {
+            if elapsed >= idle_timeout {
                 let _ = std::fs::remove_dir_all(&idle_state.stage_root);
                 std::process::exit(0);
             }
