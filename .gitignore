@@ -17,3 +17,4 @@ docs/*
 PROMPT.md
 agent/target/
 agent/cc.nanio.tug.agent.json
+agent/tug-agent.exe
