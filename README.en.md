@@ -17,13 +17,13 @@ Tug Web is an independent download extension for Chromium browsers. Manage HTTP/
 
 | File | Purpose |
 |---|---|
-| [Browser extension CRX](https://tug.nanio.cc/downloads/tug-web.crx) | Signed CRX3 package; installation depends on browser policy |
-| [Tug Agent · Windows x64](https://tug.nanio.cc/downloads/tug-agent.exe) | Optional; adds traditional BT connectivity and system file export/reveal |
-| [Tug Agent · macOS](https://tug.nanio.cc/downloads/tug-agent-macos-universal.zip) | Universal Intel / Apple Silicon app |
-| [Tug Agent · Linux x64](https://tug.nanio.cc/downloads/tug-agent-linux-x64.tar.gz) | Extract and run `sh install.sh`, without sudo |
-| [Tug Agent · Linux ARM64](https://tug.nanio.cc/downloads/tug-agent-linux-arm64.tar.gz) | Extract and run `sh install.sh`, without sudo |
-| [Build manifest](https://tug.nanio.cc/downloads/release.json) | Source commit, build time and file checksums |
-| [SHA256SUMS.txt](https://tug.nanio.cc/downloads/SHA256SUMS.txt) | Download checksums |
+| [Browser extension CRX](https://github.com/nanio-dev/Tug-Web/releases/download/last/tug-web.crx) | Signed CRX3 package; installation depends on browser policy |
+| [Tug Agent · Windows x64](https://github.com/nanio-dev/Tug-Web/releases/download/last/tug-agent.exe) | Optional; adds traditional BT connectivity and system file export/reveal |
+| [Tug Agent · macOS](https://github.com/nanio-dev/Tug-Web/releases/download/last/tug-agent-macos-universal.zip) | Universal Intel / Apple Silicon app |
+| [Tug Agent · Linux x64](https://github.com/nanio-dev/Tug-Web/releases/download/last/tug-agent-linux-x64.tar.gz) | Extract and run `sh install.sh`, without sudo |
+| [Tug Agent · Linux ARM64](https://github.com/nanio-dev/Tug-Web/releases/download/last/tug-agent-linux-arm64.tar.gz) | Extract and run `sh install.sh`, without sudo |
+| [Build manifest](https://github.com/nanio-dev/Tug-Web/releases/download/last/release.json) | Source commit, build time and file checksums |
+| [SHA256SUMS.txt](https://github.com/nanio-dev/Tug-Web/releases/download/last/SHA256SUMS.txt) | Download checksums |
 
 ### Get started
 
