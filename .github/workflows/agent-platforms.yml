@@ -11,32 +11,38 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {os: ubuntu-22.04, platform: linux, arch: x64, target: x86_64-unknown-linux-gnu}
-          - {os: ubuntu-24.04-arm, platform: linux, arch: arm64, target: aarch64-unknown-linux-gnu}
+          - {os: ubuntu-22.04, platform: linux, arch: x64, target: x86_64-unknown-linux-musl}
+          - {os: ubuntu-24.04-arm, platform: linux, arch: arm64, target: aarch64-unknown-linux-musl}
           - {os: macos-15-intel, platform: macos, arch: x64, target: x86_64-apple-darwin}
-          - {os: macos-14, platform: macos, arch: arm64, target: aarch64-apple-darwin}
+          - {os: macos-15, platform: macos, arch: arm64, target: aarch64-apple-darwin}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: {node-version: '22'}
       - if: matrix.platform == 'linux'
-        run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config libssl-dev
+        run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config musl-tools
       - uses: dtolnay/rust-toolchain@stable
-        with: {components: clippy}
+        with: {components: clippy, targets: '${{ matrix.target }}'}
+      - if: matrix.platform == 'linux'
+        run: |
+          echo 'CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc' >> "$GITHUB_ENV"
+          echo 'CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc' >> "$GITHUB_ENV"
+          echo 'CC_x86_64_unknown_linux_musl=musl-gcc' >> "$GITHUB_ENV"
+          echo 'CC_aarch64_unknown_linux_musl=musl-gcc' >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@v2
         with: {workspaces: 'agent', key: '${{ matrix.target }}'}
-      - run: cargo clippy --manifest-path agent/Cargo.toml --locked --all-targets -- -D warnings
-      - run: cargo test --manifest-path agent/Cargo.toml --locked
-      - run: cargo build --manifest-path agent/Cargo.toml --release --locked
+      - run: cargo clippy --manifest-path agent/Cargo.toml --locked --target ${{ matrix.target }} --all-targets -- -D warnings
+      - run: cargo test --manifest-path agent/Cargo.toml --locked --target ${{ matrix.target }}
+      - run: cargo build --manifest-path agent/Cargo.toml --release --locked --target ${{ matrix.target }}
       - name: Native handshake, export, lifecycle and user installation
-        env: {TUG_TEST_AGENT: '${{ github.workspace }}/agent/target/release/tug-agent'}
+        env: {TUG_TEST_AGENT: '${{ github.workspace }}/agent/target/${{ matrix.target }}/release/tug-agent'}
         run: node --test tests/agent-*.test.mjs
       - if: matrix.platform == 'linux'
-        run: node scripts/package-agent-unix.mjs linux ${{ matrix.arch }} agent/target/release/tug-agent out
+        run: node scripts/package-agent-unix.mjs linux ${{ matrix.arch }} agent/target/${{ matrix.target }}/release/tug-agent out
       - run: |
           mkdir -p artifact
-          cp agent/target/release/tug-agent artifact/tug-agent
+          cp agent/target/${{ matrix.target }}/release/tug-agent artifact/tug-agent
           if [ -d out ]; then cp out/*.tar.gz artifact/; fi
       - uses: actions/upload-artifact@v4
         with:
@@ -45,7 +51,7 @@ jobs:
           retention-days: 14
   macos-universal:
     needs: unix
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

@@ -106,6 +106,9 @@ async fn run() -> anyhow::Result<()> {
         if let Ok(exe_path) = std::env::current_exe() {
             let mut cmd = Command::new(exe_path);
             cmd.arg("--daemon");
+            cmd.stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null());
             #[cfg(target_os = "windows")]
             cmd.creation_flags(CREATE_NO_WINDOW);
             let _ = cmd.spawn();

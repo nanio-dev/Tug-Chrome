@@ -23,7 +23,7 @@ pub fn home() -> anyhow::Result<PathBuf> {
     let path =
         PathBuf::from(std::env::var_os("HOME").ok_or_else(|| anyhow::anyhow!("HOME is missing"))?);
     anyhow::ensure!(path.is_absolute(), "HOME must be absolute");
-    Ok(path)
+    Ok(std::fs::canonicalize(&path).unwrap_or(path))
 }
 
 #[cfg(target_os = "linux")]

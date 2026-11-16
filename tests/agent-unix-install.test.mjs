@@ -22,7 +22,7 @@ it('installs Unix native hosts, reconnects, replaces the old process and fully u
   token=await fs.readFile(path.join(app,'auth-token'),'utf8');assert.equal(token.length,64);
   const initialPid=await fs.readFile(path.join(app,'agent.pid'),'utf8');
   const response=await fetch('http://127.0.0.1:16899/register',{method:'POST',headers:{Origin:origin.slice(0,-1),'Content-Type':'application/json'},body:JSON.stringify({extId:'abcdefghijklmnopabcdefghijklmnop'})});assert.equal(response.status,200,await response.clone().text());
-  const manifest=JSON.parse(await fs.readFile(native,'utf8'));assert.equal(manifest.path,binary);assert.ok(manifest.allowed_origins.includes(origin));
+  const manifest=JSON.parse(await fs.readFile(native,'utf8'));assert.equal(await fs.realpath(manifest.path),await fs.realpath(binary));assert.ok(manifest.allowed_origins.includes(origin));
   assert.equal((await fs.stat(binary)).mode&0o777,0o700);assert.equal((await fs.stat(path.join(app,'auth-token'))).mode&0o077,0);
   const host=spawn(binary,[origin],{env,stdio:['pipe','pipe','pipe']});
   const frame=await new Promise((resolve,reject)=>{let data=Buffer.alloc(0);const timer=setTimeout(()=>reject(Error('Native handshake timeout')),5000);host.on('error',reject);host.stdout.on('data',chunk=>{data=Buffer.concat([data,chunk]);if(data.length>=4&&data.length>=4+data.readUInt32LE()){clearTimeout(timer);resolve(JSON.parse(data.subarray(4,4+data.readUInt32LE())));}});});
