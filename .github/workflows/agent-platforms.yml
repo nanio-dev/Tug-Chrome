@@ -26,10 +26,16 @@ jobs:
         with: {components: clippy, targets: '${{ matrix.target }}'}
       - if: matrix.platform == 'linux'
         run: |
-          echo 'CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc' >> "$GITHUB_ENV"
-          echo 'CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc' >> "$GITHUB_ENV"
+          echo 'CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=rust-lld' >> "$GITHUB_ENV"
+          echo 'CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=rust-lld' >> "$GITHUB_ENV"
           echo 'CC_x86_64_unknown_linux_musl=musl-gcc' >> "$GITHUB_ENV"
           echo 'CC_aarch64_unknown_linux_musl=musl-gcc' >> "$GITHUB_ENV"
+      - if: matrix.platform == 'linux'
+        name: Verify static target startup before building dependencies
+        run: |
+          printf 'fn main() { println!("musl target startup OK"); }' > /tmp/tug-target-check.rs
+          rustc --target ${{ matrix.target }} -C linker=rust-lld -C link-self-contained=yes /tmp/tug-target-check.rs -o /tmp/tug-target-check
+          /tmp/tug-target-check
       - uses: Swatinem/rust-cache@v2
         with: {workspaces: 'agent', key: '${{ matrix.target }}'}
       - run: cargo clippy --manifest-path agent/Cargo.toml --locked --target ${{ matrix.target }} --all-targets -- -D warnings
