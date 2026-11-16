@@ -32,15 +32,13 @@ Tug Web is an independent download extension for Chromium browsers. Manage HTTP/
 3. Chrome on Windows/macOS restricts non-store extensions, usually requiring managed enterprise deployment. Developers can build from source and load `dist/extension/` using Developer mode.
 4. Pin Tug Web to the toolbar. Add a link in the popup or open the dashboard to manage all downloads.
 
-HTTP/HTTPS and compatible WebTorrent/WebSeed tasks can use browser-only mode. For traditional BT TCP/UDP/DHT peers or system file export/reveal, follow the extension's setup flow to enable the optional **Tug Agent companion component** on Windows, macOS or Linux. It does not download HTTP sources or promise to bypass browser or source-server speed limits.
+HTTP/HTTPS and compatible WebTorrent/WebSeed tasks can use browser-only mode. For traditional BT TCP/UDP/DHT peers or system file export/reveal, follow the extension's setup flow to enable the optional **Tug Agent companion component** on Windows, macOS or Linux.
 
 On macOS, extract the archive and open `Tug Agent.app`. Developer ID signing/notarization is not configured; first launch may require approval in System Settings > Privacy & Security. On Linux, extract and run `sh install.sh` as your desktop user, without sudo. Native Chromium browser installations are supported; Snap/Flatpak native messaging bridges are not provided. Subsequent connections and the 120-second idle exit are automatic, with no login service installed.
 
 Agent installs under `%LOCALAPPDATA%\TugAgent` on Windows, `~/Library/Application Support/TugAgent` on macOS, or `${XDG_DATA_HOME:-~/.local/share}/tug-agent` on Linux. Downloads use system Downloads (Linux prefers `xdg-user-dir DOWNLOAD`), without reading browser preferences. Uninstall removes the user installation and its native host manifests.
 
 ## Screenshots
-
-English UI with sample tasks to illustrate the actual interface. Displayed speeds are illustrative, not benchmark results.
 
 | Download overview | Add a download |
 |---|---|
@@ -104,7 +102,7 @@ npm run test:browser
 npm run test:agent
 ```
 
-Browser tests use isolated profiles; Agent tests use isolated directories. Open an [issue](https://github.com/nanio-dev/Tug-Web/issues) with your browser version, reproduction steps and logs with sensitive information removed.
+Found a problem? Open an [issue](https://github.com/nanio-dev/Tug-Web/issues).
 
 ## License
 

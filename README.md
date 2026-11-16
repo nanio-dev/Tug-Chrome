@@ -32,15 +32,13 @@ Tug Web 是独立运行的 Chromium 浏览器下载扩展。在 Chrome、Edge �
 3. Chrome 在 Windows/macOS 上限制非商店扩展，通常需要受管理的企业部署策略。开发者可从源码构建后，在开发者模式下加载 `dist/extension/`。
 4. 将 Tug Web 固定到工具栏，通过弹出面板添加链接，或打开管理面板查看全部下载。
 
-普通 HTTP/HTTPS 下载和兼容的 WebTorrent/WebSeed 任务可使用纯浏览器模式。需要连接传统 BT 的 TCP/UDP/DHT 节点，或使用系统文件导出与定位时，可按扩展内引导启用 **Tug Agent 辅助组件**。组件支持 Windows、macOS 和 Linux；它不接管 HTTP 源站下载，也不保证突破浏览器或源站的速度限制。
+普通 HTTP/HTTPS 下载和兼容的 WebTorrent/WebSeed 任务可使用纯浏览器模式。需要连接传统 BT 的 TCP/UDP/DHT 节点，或使用系统文件导出与定位时，可按扩展内引导启用 **Tug Agent 辅助组件**。组件支持 Windows、macOS 和 Linux。
 
 macOS 解压后打开 `Tug Agent.app`。当前应用未配置 Developer ID 签名/公证，首次启动可能需要在系统设置的「隐私与安全性」中允许。Linux 解压后以桌面用户运行 `sh install.sh`；支持原生安装的 Chromium 系浏览器，Snap/Flatpak 浏览器的 Native Messaging 沙箱桥接暂不支持。后续连接与 120 秒空闲退出均自动处理，不安装开机常驻服务。
 
 常驻目录为 Windows `%LOCALAPPDATA%\TugAgent`、macOS `~/Library/Application Support/TugAgent`、Linux `${XDG_DATA_HOME:-~/.local/share}/tug-agent`。下载使用系统 Downloads（Linux 优先通过 `xdg-user-dir DOWNLOAD` 获取），不读取浏览器私有配置。卸载入口清理用户目录与本程序注册的 Native Messaging 清单。
 
 ## 截图
-
-以下为英文界面，使用示例任务展示布局与功能；图中速率不代表性能测试结果。
 
 | 下载总览 | 添加下载 |
 |---|---|
@@ -104,7 +102,7 @@ npm run test:browser
 npm run test:agent
 ```
 
-浏览器测试使用隔离配置；Agent 测试使用隔离目录。发现问题可提交 [Issue](https://github.com/nanio-dev/Tug-Web/issues)，请附浏览器版本、复现步骤和已移除敏感信息的日志。
+发现问题可提交 [Issue](https://github.com/nanio-dev/Tug-Web/issues)。
 
 ## 许可证
 
