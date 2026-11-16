@@ -58,7 +58,10 @@ it("authorizes the real Agent over native stdio and publishes complete exports a
     }));
     assert.notEqual(exports[0], exports[1]);
     for (const filename of exports) assert.deepEqual(await fs.readFile(filename), payload);
-    assert.equal((await fetch(`${base}/fs/export`, { method: "POST", headers: { ...exportHeaders, "X-Relative-Path": "../escape.bin" }, body: payload })).status, 400);
+    // Invalid paths are rejected before reading the body. A large upload can race
+    // that early response and surface EPIPE instead of HTTP 400 on Unix clients.
+    assert.equal((await fetch(`${base}/fs/export`, { method: "POST", headers: { ...exportHeaders, "X-Relative-Path": "../escape.bin" }, body: "must-not-be-written" })).status, 400);
+    assert.equal(await fs.stat(path.join(temp,"escape.bin")).then(()=>true,()=>false),false);
     // Abort a streaming upload; its final filename must never become visible.
     const abort = new AbortController();
     let sent = false;
