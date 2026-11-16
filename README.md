@@ -1,28 +1,60 @@
-# Tug Web
+<h1 align="center">
+  <img src="public/tug-icon.png" width="40" alt="Tug Web 图标"> Tug Web
+</h1>
 
-<p align="center"><img src="public/tug-icon.png" alt="Tug Web" width="108" /></p>
+<p align="center">浏览器里的下载工作台 · 多连接 · 断点续传 · BitTorrent / 磁力链接</p>
+<p align="center">
+  <img alt="Chrome / Edge 116+" src="https://img.shields.io/badge/Chrome%20%2F%20Edge-116%2B-4285F4">
+  <img alt="Manifest V3" src="https://img.shields.io/badge/Extension-Manifest%20V3-676728">
+  <a href="LICENSE"><img alt="Apache-2.0" src="https://img.shields.io/badge/License-Apache--2.0-blue"></a>
+</p>
+<p align="center"><b>简体中文</b> · <a href="README.en.md">English</a></p>
+<p align="center"><a href="https://tug.nanio.cc/#browser">产品官网与下载</a> · <a href="https://github.com/nanio-dev/Tug-Desktop">Windows 版</a> · <a href="https://github.com/nanio-dev/Tug-Android">Android 版</a></p>
 
-**可独立运行的 HTTP 多连接、BitTorrent / Magnet 浏览器下载器，支持可选 Tug Agent。**
+Tug Web 是独立运行的 Chromium 浏览器下载扩展。在 Chrome、Edge 等兼容浏览器中集中管理下载，支持 HTTP/HTTPS 多连接、暂停续传、种子与磁力链接。无需安装 Tug Desktop，即可使用浏览器下载能力。
 
-简体中文 | [English](README.en.md)
+## 下载
 
-Tug Web 面向 Chromium 浏览器（Chrome / Edge Manifest V3），不依赖 Tug Desktop。HTTP 下载和 WebTorrent/WebSeed 可直接通过 Offscreen Document + OPFS 运行。可选的 Windows Tug Agent 提供传统 BT TCP/UDP/DHT、系统文件导出与打开能力。任务队列、设置与恢复状态始终由插件管理。
+| 文件 | 用途 |
+|---|---|
+| [浏览器扩展 CRX](https://tug.nanio.cc/downloads/tug-web.crx) | CRX3 签名扩展包，安装方式取决于浏览器策略 |
+| [Tug Agent 辅助组件](https://tug.nanio.cc/downloads/tug-agent.exe) | 可选，Windows x64；补充传统 BT 连接、系统文件保存与定位能力 |
+| [SHA256SUMS.txt](https://tug.nanio.cc/downloads/SHA256SUMS.txt) | 下载文件校验值 |
 
-## 下载能力
+### 开始使用
 
-- **HTTP/HTTPS 多连接**：配置 1–32 连接，使用均衡的有界 Range 工作队列。明文 HTTP 或已识别的 HTTP/1.1 使用最多 6 个有效工作者，避免反复切割浏览器中排队的请求；HTTPS/HTTP/2 保留配置并发。
-- **安全续传**：检查 206 的范围、长度和资源验证器；通过强 ETag 或 Last-Modified / If-Range 续传。只有写盘并同步确认后的位置才会持久化。探测不支持 Range 时使用单流，中途资源变化则明确失败。
-- **可选增量 SHA-256**、全局限速、网络空闲超时；任务区分下载、校验与保存阶段。
-- **Torrent / Magnet**：WebRTC WebTorrent、HTTP WebSeed、逐 Piece SHA-1 校验；支持远程或本地种子、`xs=` / `ws=` 磁力参数和多文件勾选。普通 TCP/UDP/DHT 节点通过 Agent 接入。
-- **OPFS 存储**：专用 Worker 使用 SyncAccessHandle 定位写，回退至 WritableFileStream；使用有限聚合缓冲，重置与续传采用不同语义，存储错误不会被当成成功。
-- **保存与恢复**：通过浏览器下载 API 或已授权 Agent 导出；BT 逐文件记录保存结果，失败后只重试未保存文件，任务完成后清理缓存。
-- **浏览器交互**：下载自动接管、右键菜单、磁力链接捕获、Alt 临时绕过；Popup、管理面板、设置页、中英双语和深浅色主题。
+1. 下载签名的扩展 CRX，并打开浏览器扩展管理页面。
+2. 在支持手动 CRX 的浏览器中，按浏览器指引导入；是否允许安装取决于浏览器与管理策略。
+3. Chrome 在 Windows/macOS 上限制非商店扩展，通常需要受管理的企业部署策略。开发者可从源码构建后，在开发者模式下加载 `dist/extension/`。
+4. 将 Tug Web 固定到工具栏，通过弹出面板添加链接，或打开管理面板查看全部下载。
 
-Agent 当前**不接管 HTTP 源站下载**。纯浏览器有效并发仍受浏览器网络栈与服务器协议限制；配置 32 不代表任意源站都会建立 32 条有效连接。
+普通 HTTP/HTTPS 下载和兼容的 WebTorrent/WebSeed 任务可使用纯浏览器模式。需要连接传统 BT 的 TCP/UDP/DHT 节点，或使用系统文件导出与定位时，可按扩展内引导启用 **Tug Agent 辅助组件**。组件仅支持 Windows；它不接管 HTTP 源站下载，也不保证突破浏览器或源站的速度限制。
 
-## 开发与加载
+## 截图
 
-需要 Node.js >= 22、Chrome/Edge >= 116；构建 Agent 需要 Rust。
+以下为英文界面，使用示例任务展示布局与功能；图中速率不代表性能测试结果。
+
+| 下载总览 | 添加下载 |
+|---|---|
+| ![Download overview](public/screenshots/overview-en.jpg) | ![Add a download](public/screenshots/add-en.jpg) |
+
+![Browser settings](public/screenshots/settings-en.jpg)
+
+## 功能
+
+- **多连接下载**：HTTP/HTTPS 分段下载，可配置连接数、并发任务与全局限速。
+- **可靠续传**：暂停、继续、重试，以及 Range、ETag / Last-Modified 校验；服务器不支持分段时使用单流。
+- **BitTorrent / Magnet**：种子文件、磁力链接、WebTorrent/WebSeed、文件选择与逐 Piece 校验；辅助组件扩展传统 BT 连接能力。
+- **任务管理**：总览、全部任务、未完成与已完成，支持搜索、筛选、排序与批量操作。
+- **浏览器集成**：下载接管、右键菜单、磁力链接捕获，以及临时绕过接管。
+- **界面与偏好**：工具栏面板、完整管理页、浅色/深色主题，简体中文、繁體中文、English、日本語、한국어。
+- **本地保存**：下载状态和缓存保存在当前浏览器配置中；清理浏览器数据可能影响未完成任务，请先保存需要的文件。
+
+实际并发取决于浏览器网络栈及服务器支持，配置连接数不等于任意源站的有效连接数。
+
+## 从源码构建
+
+需要 Node.js 22+；构建 Windows 辅助组件还需要 Rust MSVC 工具链及 C++ Build Tools。
 
 ```powershell
 npm ci
@@ -31,42 +63,37 @@ npm test
 npm run build
 ```
 
-在 `chrome://extensions` 或 `edge://extensions` 开启开发者模式，加载 `dist/` 或 `dist/extension/`。
+Windows 可双击 `build.bat` 构建扩展，产物为 `dist/extension/`（`dist/` 也可加载）。
 
-Windows 可直接双击根目录 `build.bat` 构建 `dist`，缺少依赖时自动安装；构建后在扩展页面点击重新加载。双击 `agent/build.bat` 构建 Release 并输出 `agent/tug-agent.exe`。命令行或自动化调用可加 `--no-pause` 取消结束等待，失败时返回非零退出码。
+双击 **`packer.bat`** 会依次构建正式扩展与辅助组件，并在 `out/` 中生成：
 
-Agent 的构建、安装和原生消息配对见 [agent/README.md](agent/README.md)。新版插件要求 **Agent 协议 2**；旧版会显示“需要更新 Agent”。请同时更新插件与 Agent，不会退回无授权的本地接口。
+| 文件 | 内容 |
+|---|---|
+| `tug-web.crx` | 正式签名的 CRX3 / Manifest V3 扩展 |
+| `tug-agent.exe` | Windows Release 辅助组件 |
+| `release.json` | 版本、构建提交、文件大小与 SHA-256 |
+| `SHA256SUMS.txt` | 校验值文本 |
 
-## 测试与性能验证
+签名私钥首次生成在本地 `.local/tug-web-signing.pem`，后续打包会复用以保持扩展 ID。请备份私钥；它不会进入 Git 或 `out/`。也可通过 `TUG_EXTENSION_SIGNING_KEY` 指定已有私钥。
+
+命令行可加 `--no-pause`。任一步骤失败都会返回非零退出码。打包不包含内部文档、网站源码、截图或测试资源。扩展更新后请到扩展页面点击“重新加载”；辅助组件可随扩展一起更新。
+
+## 开发与反馈
+
+| 目录 | 内容 |
+|---|---|
+| `src/` | 扩展界面、浏览器集成与下载引擎 |
+| `agent/` | Windows 辅助组件源码 |
+| `public/` | 扩展运行资源、对外截图与资料 |
+| `scripts/`、`tests/` | 构建、测试与验证工具 |
 
 ```powershell
 npm run test:browser
 npm run test:agent
-npm run bench:http -- --connections=8,32
 ```
 
-浏览器测试使用已安装的 Playwright Chromium，或通过 `TUG_TEST_BROWSER` 指定 Chromium 可执行文件。测试创建独立配置，不操作日常浏览器数据。Agent 测试通过原生 stdio 获取凭据，使用隔离目录，不修改注册表。
+浏览器测试使用隔离配置；Agent 测试使用隔离目录。发现问题可提交 [Issue](https://github.com/nanio-dev/Tug-Web/issues)，请附浏览器版本、复现步骤和已移除敏感信息的日志。
 
-详见 [测试说明](docs/testing.md) 和 [本轮改善及兼容性说明](docs/implementation-notes.md)。
+## 许可证
 
-## 代码结构
-
-| 目录 | 职责 |
-|---|---|
-| `src/engine/http` | Range 队列、响应校验、网络超时、增量哈希与限速 |
-| `src/engine/storage` | OPFS Worker、内存后端与 IndexedDB |
-| `src/engine/torrent` | Bencode、种子/磁力解析、WebRTC/WebSeed 与 Agent 客户端 |
-| `src/engine/core` | 唯一任务管理器、恢复、逐文件保存状态 |
-| `src/background` / `src/offscreen` | 浏览器集成与引擎宿主 |
-| `src/manager` / `src/popup` / `src/options` | 用户界面 |
-| `agent` | Windows 无任务数据库的本地辅助程序 |
-| `tests` / `scripts` | 回归测试、真实浏览器/Agent 集成测试与压测工具 |
-
-## 文档
-
-- [架构与数据提交约定](docs/architecture.md)
-- [内部消息与 Agent 协议](docs/protocol.md)
-- [隐私与本机接口边界](docs/privacy.md)
-- [自动化与手动验证](docs/testing.md)
-
-Apache License 2.0，见 [LICENSE](LICENSE)。
+[Apache License 2.0](LICENSE)。

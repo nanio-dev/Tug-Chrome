@@ -1,28 +1,60 @@
-# Tug Web
+<h1 align="center">
+  <img src="public/tug-icon.png" width="40" alt="Tug Web icon"> Tug Web
+</h1>
 
-<p align="center"><img src="public/tug-icon.png" alt="Tug Web" width="108" /></p>
+<p align="center">Your browser download workspace · Multi-connection · Resume · BitTorrent / Magnet</p>
+<p align="center">
+  <img alt="Chrome / Edge 116+" src="https://img.shields.io/badge/Chrome%20%2F%20Edge-116%2B-4285F4">
+  <img alt="Manifest V3" src="https://img.shields.io/badge/Extension-Manifest%20V3-676728">
+  <a href="LICENSE"><img alt="Apache-2.0" src="https://img.shields.io/badge/License-Apache--2.0-blue"></a>
+</p>
+<p align="center"><a href="README.md">简体中文</a> · <b>English</b></p>
+<p align="center"><a href="https://tug.nanio.cc/#browser">Website and downloads</a> · <a href="https://github.com/nanio-dev/Tug-Desktop">Windows</a> · <a href="https://github.com/nanio-dev/Tug-Android">Android</a></p>
 
-**An independent multi-connection HTTP and BitTorrent/Magnet browser downloader with an optional Tug Agent.**
+Tug Web is an independent download extension for Chromium browsers. Manage HTTP/HTTPS downloads, paused tasks, torrents and magnet links in Chrome, Edge and compatible browsers. Browser downloads work without Tug Desktop.
 
-[简体中文](README.md) | English
+## Download
 
-Tug Web targets Chromium browsers (Chrome/Edge Manifest V3) and does not depend on Tug Desktop. HTTP and WebTorrent/WebSeed run inside Offscreen Document + OPFS. The optional Windows Agent adds traditional BT TCP/UDP/DHT and system file export/opening. The extension remains the sole owner of the queue, settings and recovery state.
+| File | Purpose |
+|---|---|
+| [Browser extension CRX](https://tug.nanio.cc/downloads/tug-web.crx) | Signed CRX3 package; installation depends on browser policy |
+| [Tug Agent companion component](https://tug.nanio.cc/downloads/tug-agent.exe) | Optional, Windows x64; adds traditional BT connectivity and system file export/reveal |
+| [SHA256SUMS.txt](https://tug.nanio.cc/downloads/SHA256SUMS.txt) | Download checksums |
+
+### Get started
+
+1. Download the signed CRX and open your browser's extension management page.
+2. Import it only where your browser supports manual CRX installation; browser and management policies apply.
+3. Chrome on Windows/macOS restricts non-store extensions, usually requiring managed enterprise deployment. Developers can build from source and load `dist/extension/` using Developer mode.
+4. Pin Tug Web to the toolbar. Add a link in the popup or open the dashboard to manage all downloads.
+
+HTTP/HTTPS and compatible WebTorrent/WebSeed tasks can use browser-only mode. For traditional BT TCP/UDP/DHT peers or system file export/reveal, follow the extension's setup flow to enable the optional **Tug Agent companion component**. The component supports Windows only. It does not download HTTP sources or promise to bypass browser or source-server speed limits.
+
+## Screenshots
+
+English UI with sample tasks to illustrate the actual interface. Displayed speeds are illustrative, not benchmark results.
+
+| Download overview | Add a download |
+|---|---|
+| ![Download overview](public/screenshots/overview-en.jpg) | ![Add a download](public/screenshots/add-en.jpg) |
+
+![Browser settings](public/screenshots/settings-en.jpg)
 
 ## Features
 
-- **HTTP/HTTPS**: 1–32 configured connections with a balanced, bounded Range job queue. Plain HTTP or identified HTTP/1.1 uses up to six effective workers, without recursively splitting queued requests; HTTPS/HTTP/2 retains configured concurrency.
-- **Validated resume**: exact 206 range/length checks and strong ETag or Last-Modified/If-Range validation. Only acknowledged, synchronized writes enter persistent checkpoints. Non-Range probes use a single stream; mid-download resource changes fail explicitly.
-- **Incremental SHA-256**, a shared rate limiter, network idle timeouts, and separate downloading/verifying/saving stages.
-- **Torrent/Magnet**: WebRTC WebTorrent, HTTP WebSeed, per-piece SHA-1, local/remote torrents, `xs=`/`ws=` and selective files. The Agent connects to traditional TCP/UDP/DHT peers.
-- **Bounded-memory storage**: random OPFS writes through a dedicated SyncAccessHandle worker, with a WritableFileStream fallback. Reset and resume have distinct semantics; storage errors propagate.
-- **Recoverable export**: browser download API or an authorized Agent; per-file BT export results let retries skip saved files. Cache cleanup follows completion.
-- Download interception, context menus, magnet capture, Alt bypass, popup/manager/settings, Chinese/English and light/dark themes.
+- **Multi-connection HTTP/HTTPS** with configurable connections, parallel tasks and a global speed limit.
+- **Validated resume** with pause, continue, retry, Range and ETag / Last-Modified checks; single-stream fallback when ranges are unsupported.
+- **BitTorrent / Magnet** with torrent files, magnets, WebTorrent/WebSeed, selective files and piece verification; the companion component adds traditional BT connectivity.
+- **Task management** with overview, all/active/completed lists, search, filters, sorting and bulk actions.
+- **Browser integration** with download interception, context menus, magnet capture and temporary bypass.
+- **Appearance and languages** with a toolbar popup, full dashboard, light/dark themes, Simplified Chinese, Traditional Chinese, English, Japanese and Korean.
+- **Local storage** within the current browser profile. Clearing browser data can affect unfinished tasks; save important files first.
 
-The Agent currently **does not download HTTP sources**. Browser and server protocol limits still affect effective concurrency; selecting 32 does not guarantee 32 active connections to every origin.
+Effective concurrency depends on the browser network stack and server support. A configured connection count does not guarantee that many active connections to every source.
 
-## Build and load
+## Build from source
 
-Node.js >= 22 and Chrome/Edge >= 116 are required. Building the Agent also requires Rust.
+Requires Node.js 22+. Building the Windows companion also requires the Rust MSVC toolchain and C++ Build Tools.
 
 ```powershell
 npm ci
@@ -31,33 +63,37 @@ npm test
 npm run build
 ```
 
-Enable developer mode at `chrome://extensions` or `edge://extensions`, then load `dist/` or `dist/extension/`.
+On Windows, `build.bat` builds the extension into `dist/extension/` (`dist/` is also loadable).
 
-On Windows, double-click the root `build.bat` to build `dist` (installing missing dependencies), then reload the extension. `agent/build.bat` builds Release and copies the executable to `agent/tug-agent.exe`. Pass `--no-pause` for command-line automation; failures return a nonzero exit code.
+**`packer.bat`** builds the production extension and companion component, then writes these files to `out/`:
 
-See [Agent setup](agent/README.md). This extension requires **Agent protocol 2**; older versions show an update notice and are not used through unauthenticated endpoints. Update both components together.
+| File | Contents |
+|---|---|
+| `tug-web.crx` | Signed CRX3 / Manifest V3 extension |
+| `tug-agent.exe` | Windows Release companion component |
+| `release.json` | Version, source commit, sizes and SHA-256 hashes |
+| `SHA256SUMS.txt` | Plain-text checksums |
 
-## Verify
+The signing key is created locally at `.local/tug-web-signing.pem` and reused to retain the extension ID. Back it up; it is excluded from Git and `out/`. Set `TUG_EXTENSION_SIGNING_KEY` to reuse an existing key.
+
+Use `--no-pause` for command-line runs. Any failure returns a nonzero exit code. Packages exclude internal docs, website source, screenshots and test resources. Reload the extension after an update, and keep the companion component current.
+
+## Development and feedback
+
+| Directory | Contents |
+|---|---|
+| `src/` | Extension UI, browser integration and download engines |
+| `agent/` | Windows companion source |
+| `public/` | Runtime assets and public screenshots/materials |
+| `scripts/`, `tests/` | Build, test and verification tools |
 
 ```powershell
 npm run test:browser
 npm run test:agent
-npm run bench:http -- --connections=8,32
 ```
 
-Browser tests use an installed Playwright Chromium or `TUG_TEST_BROWSER`. They create isolated profiles. Agent tests use isolated directories and native stdio authorization without registry installation.
+Browser tests use isolated profiles; Agent tests use isolated directories. Open an [issue](https://github.com/nanio-dev/Tug-Web/issues) with your browser version, reproduction steps and logs with sensitive information removed.
 
-See [testing](docs/testing.md), [architecture](docs/architecture.md), [protocol](docs/protocol.md), [privacy](docs/privacy.md) and [implementation notes](docs/implementation-notes.md).
+## License
 
-## Layout
-
-- `src/engine/http`: Range jobs, validation, timeouts, incremental checksum and rate limiting.
-- `src/engine/storage`: OPFS worker, memory backend and IndexedDB.
-- `src/engine/torrent`: parsers, WebRTC/WebSeed and Agent client.
-- `src/engine/core`: task scheduling, checkpoints and per-file export.
-- `src/background`, `src/offscreen`: browser integration and engine host.
-- `src/manager`, `src/popup`, `src/options`: UI.
-- `agent`: the optional Windows helper, without a task database.
-- `tests`, `scripts`: regression/integration tests and benchmarks.
-
-Apache License 2.0; see [LICENSE](LICENSE).
+[Apache License 2.0](LICENSE).

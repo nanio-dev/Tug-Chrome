@@ -4,8 +4,10 @@ import react from "@vitejs/plugin-react";
 
 const rootDir = import.meta.dirname;
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
   plugins: [react()],
+  // Marketing screenshots/docs in public must not ship inside the extension.
+  publicDir: command === 'serve' ? 'public' : false,
   build: {
     outDir: "dist",
     emptyOutDir: true,
@@ -18,4 +20,4 @@ export default defineConfig({
       },
     },
   },
-});
+}));

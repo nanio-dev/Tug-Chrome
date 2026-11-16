@@ -64,7 +64,12 @@ async function buildScripts() {
     },
   });
 
-  // 3. Mirror into dist/extension so both dist/ and dist/extension/ can be loaded as unpacked extension
+  // Only extension runtime resources belong in the distributable.
+  for (const asset of ['manifest.json', 'icons', '_locales', 'tug-icon.png']) {
+    cpSync(resolve(rootDir, 'public', asset), resolve(distDir, asset), { recursive: true });
+  }
+
+  // Mirror into dist/extension so both directories can be loaded unpacked.
   if (existsSync(distExtDir)) {
     rmSync(distExtDir, { recursive: true, force: true });
   }
