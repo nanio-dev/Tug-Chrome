@@ -1,17 +1,31 @@
-# Tug Agent 辅助组件
+# Tug Agent
 
-Tug Agent 为 Tug Web 提供可选的 Windows 本地能力：传统 BitTorrent TCP/UDP/DHT 连接、系统文件保存、打开与定位。HTTP 源站下载由浏览器扩展负责；组件不独立维护下载任务列表。
+Tug Agent 为 Tug Web 提供传统 BitTorrent TCP/UDP/DHT 连接，以及系统文件保存、打开和定位能力，支持 Windows、macOS 和 Linux。
 
-## 使用
+## 安装与使用
 
-从 [GitHub last Release](https://github.com/nanio-dev/Tug-Web/releases/download/last/tug-agent.exe) 下载辅助组件，按扩展中的引导完成启用与配对。普通 HTTP/HTTPS 下载可以使用纯浏览器模式。仅支持 Windows x64；建议与扩展同步更新。
+在扩展中按提示启用 Agent，也可直接下载对应平台的安装包：
 
-## 构建
+| 平台 | 下载 | 首次安装 |
+|---|---|---|
+| Windows x64 | [tug-agent.exe](https://github.com/nanio-dev/Tug-Web/releases/download/last/tug-agent.exe) | 下载后运行 |
+| macOS Intel / Apple Silicon | [通用应用包](https://github.com/nanio-dev/Tug-Web/releases/download/last/tug-agent-macos-universal.zip) | 解压后打开 `Tug Agent.app` |
+| Linux x64 | [安装包](https://github.com/nanio-dev/Tug-Web/releases/download/last/tug-agent-linux-x64.tar.gz) | 解压后在该目录运行 `sh install.sh` |
+| Linux ARM64 | [安装包](https://github.com/nanio-dev/Tug-Web/releases/download/last/tug-agent-linux-arm64.tar.gz) | 解压后在该目录运行 `sh install.sh` |
 
-需要 Rust MSVC 工具链和 C++ Build Tools。双击本目录 `build.bat`，会生成 Release 文件 `tug-agent.exe`。完整发布包请在项目根目录运行 `packer.bat`。命令行调用可加 `--no-pause`。
+macOS 首次打开可能需要在「系统设置 → 隐私与安全性」中允许。Linux 请以桌面用户安装，不使用 `sudo`；暂不支持 Snap/Flatpak 沙箱浏览器。
 
-## Companion component
+安装后扩展会自动连接，后续按需唤醒，空闲 120 秒自动退出。可在管理面板的 Agent 设置中卸载。
 
-Tug Agent optionally adds traditional BT connectivity and system file export/open/reveal to Tug Web on Windows x64. Browser-only mode is available for ordinary HTTP/HTTPS downloads. Download it from the [GitHub last release](https://github.com/nanio-dev/Tug-Web/releases/download/last/tug-agent.exe) and follow the extension's pairing flow.
+## 本地构建
 
-Build with `build.bat`, or run the root `packer.bat` to package both components. Licensed under [Apache-2.0](../LICENSE).
+在本目录执行：
+
+| 平台 | 环境 | 命令 | 输出 |
+|---|---|---|---|
+| Windows | Rust MSVC、C++ Build Tools | `build.bat --no-pause` | `tug-agent.exe` |
+| macOS / Linux | Rust、C/C++ 构建工具 | `sh build.sh` | `tug-agent` |
+
+完整打包与发布见[项目 README](../README.md)。
+
+[English documentation](../README.en.md) · [Apache-2.0](../LICENSE)
