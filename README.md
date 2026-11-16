@@ -17,13 +17,13 @@ Tug Web 是独立运行的 Chromium 浏览器下载扩展。在 Chrome、Edge �
 
 | 文件 | 用途 |
 |---|---|
-| [浏览器扩展 CRX](https://github.com/nanio-dev/Tug-Web/releases/download/last/tug-web.crx) | CRX3 签名扩展包，安装方式取决于浏览器策略 |
+| [浏览器扩展 CRX](https://tug.nanio.cc/downloads/tug-web.crx) | CRX3 签名扩展包，安装方式取决于浏览器策略 |
 | [Tug Agent · Windows x64](https://tug.nanio.cc/downloads/tug-agent.exe) | 可选；补充传统 BT 连接、系统文件保存与定位能力 |
 | [Tug Agent · macOS](https://tug.nanio.cc/downloads/tug-agent-macos-universal.zip) | Intel / Apple Silicon 通用应用包 |
 | [Tug Agent · Linux x64](https://tug.nanio.cc/downloads/tug-agent-linux-x64.tar.gz) | 解压后运行 `sh install.sh`，无需 sudo |
 | [Tug Agent · Linux ARM64](https://tug.nanio.cc/downloads/tug-agent-linux-arm64.tar.gz) | 解压后运行 `sh install.sh`，无需 sudo |
-| [发布记录](https://github.com/nanio-dev/Tug-Web/releases/download/last/release.json) | 构建提交、时间与文件校验信息 |
-| [SHA256SUMS.txt](https://github.com/nanio-dev/Tug-Web/releases/download/last/SHA256SUMS.txt) | 下载文件校验值 |
+| [发布记录](https://tug.nanio.cc/downloads/release.json) | 构建提交、时间与文件校验信息 |
+| [SHA256SUMS.txt](https://tug.nanio.cc/downloads/SHA256SUMS.txt) | 下载文件校验值 |
 
 ### 开始使用
 
