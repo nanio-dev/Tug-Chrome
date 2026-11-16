@@ -85,6 +85,52 @@ it('saves the already cached installer without downloading its remote URL again'
  });
 });
 
+it('downloads and restores the correct Unix installer metadata through the real background',async()=>{
+ await withBackground('old',async({p,worker})=>{
+  await worker.evaluate(()=>{
+   const send=chrome.runtime.sendMessage.bind(chrome.runtime);
+   chrome.runtime.sendMessage=(message,callback)=>{
+    if(message.type==='download_agent_binary'){globalThis.packageUrl=message.payload.url;callback({ok:true,data:{blobUrl:'blob:chrome-extension://unix-package',totalBytes:1024}});return;}
+    return send(message,callback);
+   };
+   chrome.downloads.download=async options=>{globalThis.packageName=options.filename;return 9991;};
+   chrome.downloads.search=async()=>[{id:9991,state:'in_progress'}];
+  });
+  for(const [os,arch,name,installer]of [['mac','arm64','tug-agent-macos-universal.zip','macos'],['linux','x86-64','tug-agent-linux-x64.tar.gz','linux'],['linux','arm64','tug-agent-linux-arm64.tar.gz','linux']]){
+   await rpc(p,'reset_agent_install_state');await worker.evaluate(({os,arch})=>{chrome.runtime.getPlatformInfo=async()=>({os,arch,nacl_arch:arch});},{os,arch});
+   await rpc(p,'install_native_agent');await waitUntil(async()=>(await rpc(p,'get_agent_install_state')).phase==='confirming_save');
+   assert.equal((await rpc(p,'get_agent_install_state')).installer,installer);
+   assert.match(await worker.evaluate(()=>globalThis.packageUrl),new RegExp('/downloads/'+name.replaceAll('.','\\.')+'\\?t=\\d+$'));
+   await rpc(p,'export_downloaded_agent');assert.equal(await worker.evaluate(()=>globalThis.packageName),name);
+  }
+ });
+});
+
+it('guides Unix manual installation and closes automatically after the Agent connects',async()=>{
+ const h=await launchHarness();try{
+  const base=await h.openPage(),settings=(await rpc(base,'get_state_snapshot')).settings;
+  for(const installer of ['macos','linux']){
+   const p=await h.context.newPage();await p.addInitScript(({settings,installer})=>{
+    window.connected=false;window.opened=0;window.shown=0;window.waitedForWindowsLaunch=false;
+    chrome.downloads.open=async()=>{window.opened++;};chrome.downloads.show=()=>{window.shown++;};
+    chrome.runtime.sendMessage=async m=>{let data={};
+     if(m.type==='get_state_snapshot')data={settings:{...settings,locale:'en-US',standaloneMode:false},tasks:[]};
+     else if(m.type==='get_agent_install_state')data={phase:'need_manual_launch',installer,downloadId:123,bytesReceived:10,totalBytes:10};
+     else if(m.type==='ensure_native_helper'||m.type==='get_native_helper_status')data={available:window.connected};
+     else if(m.type==='launch_downloaded_agent')window.waitedForWindowsLaunch=true;
+     return{ok:true,data};
+    };
+   },{settings,installer});
+   await p.goto(h.origin+'/popup.html');
+   await p.getByRole('button',{name:installer==='macos'?'Open installer archive':'Show in Folder',exact:true}).click();
+   assert.equal(await p.evaluate(()=>window.waitedForWindowsLaunch),false);
+   assert.equal(await p.locator('.modal-backdrop').count(),1);
+   assert.equal(await p.evaluate(()=>window.opened),installer==='macos'?1:0);assert.equal(await p.evaluate(()=>window.shown),installer==='linux'?1:0);
+   await p.evaluate(()=>window.connected=true);await p.locator('.modal-backdrop').waitFor({state:'hidden'});await p.close();
+  }
+ }finally{await h.close();}
+});
+
 it('silently reconnects an already paired browser and automatically closes the activation dialog',async()=>{
  const h=await launchHarness();try{
  const base=await h.openPage(),settings=(await rpc(base,'get_state_snapshot')).settings,p=await h.context.newPage();

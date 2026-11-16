@@ -8,6 +8,8 @@ call build.bat --no-pause
 if errorlevel 1 goto :failed
 call agent\build.bat --no-pause
 if errorlevel 1 goto :failed
+node scripts\fetch-agent-artifacts.mjs
+if errorlevel 1 goto :failed
 node scripts\package-release.mjs
 if errorlevel 1 goto :failed
 node scripts\verify-release.mjs

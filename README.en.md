@@ -18,7 +18,10 @@ Tug Web is an independent download extension for Chromium browsers. Manage HTTP/
 | File | Purpose |
 |---|---|
 | [Browser extension CRX](https://github.com/nanio-dev/Tug-Web/releases/download/last/tug-web.crx) | Signed CRX3 package; installation depends on browser policy |
-| [Tug Agent companion component](https://github.com/nanio-dev/Tug-Web/releases/download/last/tug-agent.exe) | Optional, Windows x64; adds traditional BT connectivity and system file export/reveal |
+| [Tug Agent · Windows x64](https://tug.nanio.cc/downloads/tug-agent.exe) | Optional; adds traditional BT connectivity and system file export/reveal |
+| [Tug Agent · macOS](https://tug.nanio.cc/downloads/tug-agent-macos-universal.zip) | Universal Intel / Apple Silicon app |
+| [Tug Agent · Linux x64](https://tug.nanio.cc/downloads/tug-agent-linux-x64.tar.gz) | Extract and run `sh install.sh`, without sudo |
+| [Tug Agent · Linux ARM64](https://tug.nanio.cc/downloads/tug-agent-linux-arm64.tar.gz) | Extract and run `sh install.sh`, without sudo |
 | [Build manifest](https://github.com/nanio-dev/Tug-Web/releases/download/last/release.json) | Source commit, build time and file checksums |
 | [SHA256SUMS.txt](https://github.com/nanio-dev/Tug-Web/releases/download/last/SHA256SUMS.txt) | Download checksums |
 
@@ -29,7 +32,11 @@ Tug Web is an independent download extension for Chromium browsers. Manage HTTP/
 3. Chrome on Windows/macOS restricts non-store extensions, usually requiring managed enterprise deployment. Developers can build from source and load `dist/extension/` using Developer mode.
 4. Pin Tug Web to the toolbar. Add a link in the popup or open the dashboard to manage all downloads.
 
-HTTP/HTTPS and compatible WebTorrent/WebSeed tasks can use browser-only mode. For traditional BT TCP/UDP/DHT peers or system file export/reveal, follow the extension's setup flow to enable the optional **Tug Agent companion component**. The component supports Windows only. It does not download HTTP sources or promise to bypass browser or source-server speed limits.
+HTTP/HTTPS and compatible WebTorrent/WebSeed tasks can use browser-only mode. For traditional BT TCP/UDP/DHT peers or system file export/reveal, follow the extension's setup flow to enable the optional **Tug Agent companion component** on Windows, macOS or Linux. It does not download HTTP sources or promise to bypass browser or source-server speed limits.
+
+On macOS, extract the archive and open `Tug Agent.app`. Developer ID signing/notarization is not configured; first launch may require approval in System Settings > Privacy & Security. On Linux, extract and run `sh install.sh` as your desktop user, without sudo. Native Chromium browser installations are supported; Snap/Flatpak native messaging bridges are not provided. Subsequent connections and the 120-second idle exit are automatic, with no login service installed.
+
+Agent installs under `%LOCALAPPDATA%\TugAgent` on Windows, `~/Library/Application Support/TugAgent` on macOS, or `${XDG_DATA_HOME:-~/.local/share}/tug-agent` on Linux. Downloads use system Downloads (Linux prefers `xdg-user-dir DOWNLOAD`), without reading browser preferences. Uninstall removes the user installation and its native host manifests.
 
 ## Screenshots
 
@@ -72,10 +79,14 @@ On Windows, `build.bat` builds the extension into `dist/extension/` (`dist/` is 
 |---|---|
 | `tug-web.crx` | Signed CRX3 / Manifest V3 extension |
 | `tug-agent.exe` | Windows Release companion component |
+| `tug-agent-macos-universal.zip` | Universal macOS application |
+| `tug-agent-linux-x64.tar.gz`, `tug-agent-linux-arm64.tar.gz` | Linux installers |
 | `release.json` | Version, source commit, sizes and SHA-256 hashes |
 | `SHA256SUMS.txt` | Plain-text checksums |
 
 The signing key is created locally at `.local/tug-web-signing.pem` and reused to retain the extension ID. Back it up; it is excluded from Git and `out/`. Set `TUG_EXTENSION_SIGNING_KEY` to reuse an existing key.
+
+Native GitHub Actions runners build and test Mac/Linux artifacts. Packaging requires an authenticated GitHub CLI and downloads the successful build matching the Agent source commit; missing/failed builds stop publication. Build locally on Mac/Linux with `sh agent/build.sh`. The full publish pipeline is `web/push.bat --no-pause`.
 
 Use `--no-pause` for command-line runs. Any failure returns a nonzero exit code. Packages exclude internal docs, website source, screenshots and test resources. Reload the extension after an update, and keep the companion component current.
 
@@ -84,7 +95,7 @@ Use `--no-pause` for command-line runs. Any failure returns a nonzero exit code.
 | Directory | Contents |
 |---|---|
 | `src/` | Extension UI, browser integration and download engines |
-| `agent/` | Windows companion source |
+| `agent/` | Windows / macOS / Linux companion source |
 | `public/` | Runtime assets and public screenshots/materials |
 | `scripts/`, `tests/` | Build, test and verification tools |
 

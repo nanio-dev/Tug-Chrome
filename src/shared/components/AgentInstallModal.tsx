@@ -50,7 +50,7 @@ export function AgentInstallModal({ open, compact = false, onClose, onActivated 
         // A previous successful installation is history, not a live connection check.
         if (initial && (next.phase === "idle" || next.phase === "ready")) next = await installNativeAgent();
         if (cancelled) return;
-        if (next.phase === "need_pairing" && !actionActive.current && Date.now() - lastProbe >= 2000) {
+        if ((next.phase === "need_pairing" || (next.phase === "need_manual_launch" && next.installer && next.installer !== "windows")) && !actionActive.current && Date.now() - lastProbe >= 2000) {
           lastProbe = Date.now();
           const status = await ensureNativeHelper(false);
           if (cancelled) return;
@@ -95,9 +95,11 @@ export function AgentInstallModal({ open, compact = false, onClose, onActivated 
   const handleManualLaunch = () => run(async () => {
     const id = state.downloadId;
     if (id === null) throw new Error(t("agentInstall.fileMissing"));
+    if (state.installer === "linux") { chrome.downloads.show(id); return state; }
     // Invoke while the click's user gesture is still active, before any await.
     try { await chrome.downloads.open(id); }
     catch { await resetAgentInstallState().catch(() => {}); throw new Error(t("agentInstall.launchFailed")); }
+    if (state.installer === "macos") return state;
     if (visible.current) setState(prev => ({ ...prev, phase: "launching" }));
     return launchDownloadedAgent(id);
   });
@@ -161,7 +163,7 @@ export function AgentInstallModal({ open, compact = false, onClose, onActivated 
             {state.phase === "confirming_save" && state.downloadId !== null && (
             <button type="button" className="btn btn-sm" disabled={busy} onClick={() => void run(getAgentInstallState)}>{t("agentInstall.checkSave")}</button>
           )}
-          {state.phase === "need_manual_launch" && t("agentInstall.needManual")}
+          {state.phase === "need_manual_launch" && t(state.installer === "macos" ? "agentInstall.needManualMac" : state.installer === "linux" ? "agentInstall.needManualLinux" : "agentInstall.needManual")}
             {state.phase === "need_pairing" && t("agentInstall.needPairing")}
             {state.phase === "ready" && (
               <span className="ok">● {t("agentInstall.ready")}</span>
@@ -237,7 +239,7 @@ export function AgentInstallModal({ open, compact = false, onClose, onActivated 
               disabled={busy}
               onClick={() => void handleManualLaunch()}
             >
-              {t("agentInstall.manualBtn")}
+              {t(state.installer === "linux" ? "agentInstall.showFolderBtn" : state.installer === "macos" ? "agentInstall.openPackageBtn" : "agentInstall.manualBtn")}
             </button>
           )}
           {state.phase === "need_pairing" && (

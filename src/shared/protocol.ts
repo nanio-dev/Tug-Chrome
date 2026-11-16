@@ -60,6 +60,7 @@ export type AgentInstallPhase =
   | "error";
 
 export interface AgentInstallState {
+  installer?: "windows" | "macos" | "linux";
   phase: AgentInstallPhase;
   bytesReceived: number;
   totalBytes: number;

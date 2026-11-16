@@ -3,8 +3,10 @@ import {readFile} from 'node:fs/promises';
 import {createHash,verify} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import path from 'node:path';
+import {RELEASE_FILES} from './release-artifacts.mjs';
 const root=path.resolve(import.meta.dirname,'..'),out=path.join(root,'out');
 const release=JSON.parse(await readFile(path.join(out,'release.json'),'utf8'));
+assert.deepEqual(release.files.map(f=>f.name).sort(),[...RELEASE_FILES].sort());
 for(const file of release.files){const bytes=await readFile(path.join(out,file.name));assert.equal(bytes.length,file.bytes);assert.equal(createHash('sha256').update(bytes).digest('hex'),file.sha256);}
 const crx=await readFile(path.join(out,'tug-web.crx'));assert.equal(crx.toString('ascii',0,4),'Cr24');assert.equal(crx.readUInt32LE(4),3);
 // Chromium components/crx_file/crx3.proto: length-delimited protobuf fields.

@@ -1,4 +1,4 @@
-import { AGENT_DOWNLOAD_URL } from "../shared/agent-package";
+import { AGENT_PACKAGES, getAgentPackage, type AgentPackage } from "../shared/agent-package";
 import { translate } from "../shared/i18n/catalog";
 import { resolveLocale } from "../shared/i18n/locales";
 import type { MessageKey } from "../shared/i18n/zh-CN";
@@ -542,31 +542,35 @@ function setAgentReadyBadge(pendingLaunch: boolean): void {
 }
 
 let pendingAgentBlobUrl: string | null = null;
+let pendingAgentPackage: AgentPackage | null = null;
 let installGeneration = 0;
 let installStateLoading: Promise<void> | null = null;
 let installStateSave: Promise<unknown> = Promise.resolve();
 let lastInstallSave = 0;
 const INSTALL_SESSION_KEY = "tugAgentInstallSession";
 function setAgentInstallState(next: AgentInstallState): void {
+  if (pendingAgentPackage && next.phase !== "idle") next = { ...next, installer: pendingAgentPackage.kind };
   const phaseChanged = agentInstallState.phase !== next.phase;
   agentInstallState = next;
   if (!phaseChanged && next.phase === "downloading" && Date.now() - lastInstallSave < 1000) return;
   lastInstallSave = Date.now();
-  const saved = { state: { ...next }, blobUrl: pendingAgentBlobUrl };
+  const saved = { state: { ...next }, blobUrl: pendingAgentBlobUrl, packageUrl: pendingAgentPackage?.url };
   installStateSave = installStateSave.catch(() => {}).then(() => chrome.storage.session.set({ [INSTALL_SESSION_KEY]: saved }));
 }
 function resetAgentInstallation(): void {
   installGeneration++;
   pendingAgentBlobUrl = null;
+  pendingAgentPackage = null;
   setAgentReadyBadge(false);
   setAgentInstallState({ phase: "idle", bytesReceived: 0, totalBytes: 0, downloadId: null });
 }
 function loadAgentInstallState(): Promise<void> {
   if (!installStateLoading) installStateLoading = (async () => {
-    const saved = (await chrome.storage.session.get(INSTALL_SESSION_KEY))[INSTALL_SESSION_KEY] as { state?: AgentInstallState; blobUrl?: string } | undefined;
+    const saved = (await chrome.storage.session.get(INSTALL_SESSION_KEY))[INSTALL_SESSION_KEY] as { state?: AgentInstallState; blobUrl?: string; packageUrl?: string } | undefined;
     if (!saved?.state) return;
     agentInstallState = saved.state;
     pendingAgentBlobUrl = typeof saved.blobUrl === "string" ? saved.blobUrl : null;
+    pendingAgentPackage = Object.values(AGENT_PACKAGES).find(pkg => pkg.url === saved.packageUrl) ?? null;
     if (["checking", "downloading", "launching", "waiting_ready"].includes(agentInstallState.phase)) {
       setAgentInstallState({ ...agentInstallState, phase: "error", message: t("agentInstall.interrupted") });
     }
@@ -621,7 +625,7 @@ async function exportDownloadedAgent(): Promise<AgentInstallState> {
   }
 
   try {
-    const installerName = "tug-agent.exe";
+    const installerName = (pendingAgentPackage ?? getAgentPackage(await chrome.runtime.getPlatformInfo())).filename;
     pendingBlobExports.set(blobUrl, installerName);
     const downloadId = await chrome.downloads.download({
       url: blobUrl,
@@ -746,11 +750,14 @@ async function startInstallNativeAgent(): Promise<AgentInstallState> {
 
   void (async () => {
     try {
-      logDiag("activate", `starting offscreen fetch from ${AGENT_DOWNLOAD_URL}`);
+      const pkg = getAgentPackage(await chrome.runtime.getPlatformInfo());
+      if (attempt !== installGeneration) return;
+      pendingAgentPackage = pkg;
+      logDiag("activate", `starting offscreen fetch from ${pkg.url}`);
       const { blobUrl, totalBytes } = await forwardToOffscreen<
         { blobUrl: string; totalBytes: number },
         { url: string }
-      >("download_agent_binary", { url: `${AGENT_DOWNLOAD_URL}?t=${Date.now()}` });
+      >("download_agent_binary", { url: `${pkg.url}?t=${Date.now()}` });
       logDiag("activate", `offscreen download complete (${totalBytes} bytes), waiting for user confirm`);
 
       if (attempt !== installGeneration) return;
