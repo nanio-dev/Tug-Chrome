@@ -1,5 +1,7 @@
 # Tug Agent
 
+**简体中文** · [English](README.en.md)
+
 Tug Agent 为 Tug Web 提供传统 BitTorrent TCP/UDP/DHT 连接，以及系统文件保存、打开和定位能力，支持 Windows、macOS 和 Linux。
 
 ## 安装与使用
@@ -28,4 +30,4 @@ macOS 首次打开可能需要在「系统设置 → 隐私与安全性」中允
 
 完整打包与发布见[项目 README](../README.md)。
 
-[English documentation](../README.en.md) · [Apache-2.0](../LICENSE)
+[Apache-2.0](../LICENSE)
