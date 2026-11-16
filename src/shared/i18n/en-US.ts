@@ -2,7 +2,7 @@ import type { Messages } from "./zh-CN";
 
 export const enUS: Messages = {
   "app.name": "Tug Web",
-  "app.tagline": "Standalone Multi-connection & Torrent Browser Client",
+  "app.tagline": "Faster downloads. Less waiting.",
   "nav.overview": "Overview",
   "nav.all": "All Tasks",
   "nav.active": "Active",

@@ -1,6 +1,6 @@
 export const zhCN = {
   "app.name": "Tug Web",
-  "app.tagline": "浏览器多线程与 BT 下载客户端",
+  "app.tagline": "多线程加速，畅快下载",
   "nav.overview": "总览",
   "nav.all": "全部任务",
   "nav.active": "未完成",

@@ -2,7 +2,7 @@ import type { Messages } from "./zh-CN";
 
 export const koKR: Messages = {
   "app.name": "Tug Web",
-  "app.tagline": "브라우저용 다중 연결 및 BT 다운로드 클라이언트",
+  "app.tagline": "더 빠르고 쾌적한 다운로드",
   "nav.overview": "개요",
   "nav.all": "모든 작업",
   "nav.active": "미완료",

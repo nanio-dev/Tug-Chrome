@@ -2,7 +2,7 @@ import type { Messages } from "./zh-CN";
 
 export const zhTW: Messages = {
   "app.name": "Tug Web",
-  "app.tagline": "瀏覽器多連線與 BT 下載用戶端",
+  "app.tagline": "多連線加速，暢快下載",
   "nav.overview": "總覽",
   "nav.all": "全部任務",
   "nav.active": "未完成",

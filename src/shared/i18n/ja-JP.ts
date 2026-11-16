@@ -2,7 +2,7 @@ import type { Messages } from "./zh-CN";
 
 export const jaJP: Messages = {
   "app.name": "Tug Web",
-  "app.tagline": "ブラウザー用マルチ接続・BTダウンローダー",
+  "app.tagline": "もっと速く、快適にダウンロード",
   "nav.overview": "概要",
   "nav.all": "すべてのタスク",
   "nav.active": "未完了",
