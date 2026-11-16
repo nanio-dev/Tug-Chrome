@@ -15,6 +15,7 @@ mod auth;
 mod config;
 mod file_ops;
 mod native_messaging;
+mod platform;
 mod registry;
 mod routes;
 mod state;
@@ -52,8 +53,7 @@ use crate::streamer::handle_webseed_stream;
 
 fn startup_log(message: &str) {
     use std::io::Write;
-    if let Some(base) = std::env::var_os("LOCALAPPDATA") {
-        let dir = std::path::PathBuf::from(base).join("TugAgent");
+    if let Ok(dir) = platform::app_dir() {
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join("startup.log");
         if std::fs::metadata(&path).is_ok_and(|m| m.len() > 128 * 1024) {
@@ -145,7 +145,12 @@ async fn run() -> anyhow::Result<()> {
     };
 
     let bound_port = listener.local_addr()?.port();
-    let stage_root = std::env::temp_dir().join("tug-agent-stage");
+    #[cfg(unix)]
+    std::fs::write(
+        platform::app_dir()?.join("agent.pid"),
+        std::process::id().to_string(),
+    )?;
+    let stage_root = platform::app_dir()?.join("stage");
     let _ = std::fs::remove_dir_all(&stage_root);
     std::fs::create_dir_all(&stage_root)?;
 

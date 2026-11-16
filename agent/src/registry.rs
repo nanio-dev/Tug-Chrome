@@ -16,7 +16,9 @@ use anyhow::{Context, anyhow};
 
 #[cfg(target_os = "windows")]
 use crate::config::CREATE_NO_WINDOW;
-use crate::config::{HOST_NAME, PROTOCOL_SCHEME};
+use crate::config::HOST_NAME;
+#[cfg(windows)]
+use crate::config::PROTOCOL_SCHEME;
 
 #[cfg(target_os = "windows")]
 const LEGACY_HOST_NAME: &str = "com.tug.web.helper";
@@ -223,6 +225,14 @@ fn cleanup_legacy_registry() {
 /// 当 `force_registry` 为 `false` 且目标 `ext_id` 已在清单中时直接短路返回，避免重复 I/O。
 pub fn install_and_register(ext_id: Option<&str>, force_registry: bool) -> anyhow::Result<PathBuf> {
     let exe_path = std::env::current_exe().context("无法获取当前可执行文件路径")?;
+    install_manifest_for(&exe_path, ext_id, force_registry)
+}
+
+pub fn install_manifest_for(
+    exe_path: &std::path::Path,
+    ext_id: Option<&str>,
+    force_registry: bool,
+) -> anyhow::Result<PathBuf> {
     let exe_dir = exe_path
         .parent()
         .ok_or_else(|| anyhow!("无法获取可执行文件所在目录"))?;
@@ -333,6 +343,8 @@ pub fn install_and_register(ext_id: Option<&str>, force_registry: bool) -> anyho
         }
     }
 
+    #[cfg(unix)]
+    crate::platform::register_manifests(serde_json::to_string_pretty(&manifest_json)?.as_bytes())?;
     Ok(manifest_path)
 }
 
@@ -398,7 +410,7 @@ fn resolve_persistent_agent_dir() -> Option<PathBuf> {
 pub fn maybe_migrate_to_app_dir() -> anyhow::Result<bool> {
     #[cfg(not(windows))]
     {
-        Ok(false)
+        crate::platform::install_current()
     }
     #[cfg(windows)]
     {
@@ -513,6 +525,8 @@ fn stop_old_agents() -> anyhow::Result<()> {
 
 /// 彻底卸载 Tug Agent：清理注册表、清单文件、临时目录，并在退出后删除常驻目录中的自身文件。
 pub fn uninstall_self() -> anyhow::Result<()> {
+    #[cfg(unix)]
+    crate::platform::uninstall()?;
     #[cfg(windows)]
     {
         let app_dir =

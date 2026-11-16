@@ -1,0 +1,63 @@
+name: Agent platforms
+on:
+  workflow_dispatch:
+  push:
+    paths: ['agent/**', 'scripts/package-agent-unix.mjs', 'tests/agent-*.test.mjs', '.github/workflows/agent-platforms.yml']
+permissions:
+  contents: read
+jobs:
+  unix:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: ubuntu-22.04, platform: linux, arch: x64, target: x86_64-unknown-linux-gnu}
+          - {os: ubuntu-24.04-arm, platform: linux, arch: arm64, target: aarch64-unknown-linux-gnu}
+          - {os: macos-15-intel, platform: macos, arch: x64, target: x86_64-apple-darwin}
+          - {os: macos-14, platform: macos, arch: arm64, target: aarch64-apple-darwin}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - if: matrix.platform == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config libssl-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with: {components: clippy}
+      - uses: Swatinem/rust-cache@v2
+        with: {workspaces: 'agent', key: '${{ matrix.target }}'}
+      - run: cargo clippy --manifest-path agent/Cargo.toml --locked --all-targets -- -D warnings
+      - run: cargo test --manifest-path agent/Cargo.toml --locked
+      - run: cargo build --manifest-path agent/Cargo.toml --release --locked
+      - name: Native handshake, export, lifecycle and user installation
+        env: {TUG_TEST_AGENT: '${{ github.workspace }}/agent/target/release/tug-agent'}
+        run: node --test tests/agent-*.test.mjs
+      - if: matrix.platform == 'linux'
+        run: node scripts/package-agent-unix.mjs linux ${{ matrix.arch }} agent/target/release/tug-agent out
+      - run: |
+          mkdir -p artifact
+          cp agent/target/release/tug-agent artifact/tug-agent
+          if [ -d out ]; then cp out/*.tar.gz artifact/; fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent-${{ matrix.platform }}-${{ matrix.arch }}
+          path: artifact/
+          retention-days: 14
+  macos-universal:
+    needs: unix
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - uses: actions/download-artifact@v4
+        with: {name: agent-macos-x64, path: build/x64}
+      - uses: actions/download-artifact@v4
+        with: {name: agent-macos-arm64, path: build/arm64}
+      - run: |
+          lipo -create build/x64/tug-agent build/arm64/tug-agent -output build/tug-agent
+          chmod +x build/tug-agent
+          lipo -verify_arch x86_64 arm64 build/tug-agent
+          node scripts/package-agent-unix.mjs macos universal build/tug-agent out
+      - uses: actions/upload-artifact@v4
+        with: {name: agent-macos-universal, path: 'out/tug-agent-macos-universal.zip', retention-days: 14}

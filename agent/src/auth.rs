@@ -20,10 +20,7 @@ fn extension_origin(origin: &str) -> bool {
         .is_some_and(valid_extension_id)
 }
 fn token_path() -> anyhow::Result<PathBuf> {
-    let base = std::env::var_os("LOCALAPPDATA")
-        .or_else(|| std::env::var_os("HOME"))
-        .ok_or_else(|| anyhow::anyhow!("Missing per-user application directory"))?;
-    Ok(PathBuf::from(base).join("TugAgent").join("auth-token"))
+    Ok(crate::platform::app_dir()?.join("auth-token"))
 }
 pub fn native_token() -> anyhow::Result<String> {
     token_at(&token_path()?)

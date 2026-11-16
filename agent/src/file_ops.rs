@@ -63,6 +63,17 @@ fn windows_downloads_dir() -> Option<PathBuf> {
 
 /// 获取当前用户的系统 `Downloads` 下载目录。
 pub fn resolve_downloads_dir() -> PathBuf {
+    #[cfg(target_os = "linux")]
+    if !std::env::args().any(|a| a == "--serve-only" || a == "--isolated-install")
+        && let Ok(output) = Command::new("xdg-user-dir").arg("DOWNLOAD").output()
+        && output.status.success()
+        && let Ok(value) = String::from_utf8(output.stdout)
+    {
+        let path = PathBuf::from(value.trim_end_matches(['\n', '\r']));
+        if path.is_absolute() {
+            return path;
+        }
+    }
     #[cfg(windows)]
     if !std::env::args().any(|a| a == "--serve-only" || a == "--isolated-install")
         && let Some(path) = windows_downloads_dir()
@@ -349,7 +360,9 @@ pub async fn handle_fs_open(
             } else {
                 dl_root
             };
-            open_folder_in_os(&folder);
+            if let Err(err) = open_folder_in_os(&folder) {
+                return json_error(StatusCode::INTERNAL_SERVER_ERROR, err.to_string());
+            }
             with_cors(
                 Json(serde_json::json!({
                     "ok": true,
@@ -367,7 +380,9 @@ pub async fn handle_fs_open(
 
             if let Some(path) = target {
                 if path.exists() {
-                    reveal_file_in_os(&path);
+                    if let Err(err) = reveal_file_in_os(&path) {
+                        return json_error(StatusCode::INTERNAL_SERVER_ERROR, err.to_string());
+                    }
                     return with_cors(
                         Json(serde_json::json!({
                             "ok": true,
@@ -379,7 +394,9 @@ pub async fn handle_fs_open(
                 } else if let Some(parent) = path.parent()
                     && parent.exists()
                 {
-                    open_folder_in_os(parent);
+                    if let Err(err) = open_folder_in_os(parent) {
+                        return json_error(StatusCode::INTERNAL_SERVER_ERROR, err.to_string());
+                    }
                     return with_cors(
                         Json(serde_json::json!({
                             "ok": true,
@@ -391,7 +408,9 @@ pub async fn handle_fs_open(
                 }
             }
 
-            open_folder_in_os(&dl_root);
+            if let Err(err) = open_folder_in_os(&dl_root) {
+                return json_error(StatusCode::INTERNAL_SERVER_ERROR, err.to_string());
+            }
             with_cors(
                 Json(serde_json::json!({
                     "ok": true,
@@ -410,7 +429,9 @@ pub async fn handle_fs_open(
             if let Some(path) = target
                 && path.exists()
             {
-                open_file_in_os(&path);
+                if let Err(err) = open_file_in_os(&path) {
+                    return json_error(StatusCode::INTERNAL_SERVER_ERROR, err.to_string());
+                }
                 return with_cors(
                     Json(serde_json::json!({
                         "ok": true,
@@ -421,7 +442,9 @@ pub async fn handle_fs_open(
                 );
             }
 
-            open_folder_in_os(&dl_root);
+            if let Err(err) = open_folder_in_os(&dl_root) {
+                return json_error(StatusCode::INTERNAL_SERVER_ERROR, err.to_string());
+            }
             with_cors(
                 Json(serde_json::json!({
                     "ok": true,
@@ -461,29 +484,77 @@ pub async fn handle_fs_delete(
     )
 }
 
-fn open_folder_in_os(folder: &Path) {
+fn open_folder_in_os(folder: &Path) -> std::io::Result<()> {
     #[cfg(target_os = "windows")]
     {
-        let _ = Command::new("explorer.exe").arg(folder).spawn();
+        Command::new("explorer.exe").arg(folder).spawn()?;
     }
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("/usr/bin/open").arg(folder).spawn()?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        Command::new("xdg-open").arg(folder).spawn()?;
+    }
+    Ok(())
 }
 
-fn reveal_file_in_os(file_path: &Path) {
+fn reveal_file_in_os(file_path: &Path) -> std::io::Result<()> {
     #[cfg(target_os = "windows")]
     {
         let canonical = dunce_norm(file_path);
-        let _ = Command::new("explorer.exe")
+        Command::new("explorer.exe")
             .raw_arg(format!("/select,\"{}\"", canonical))
-            .spawn();
+            .spawn()?;
     }
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("/usr/bin/open")
+            .arg("-R")
+            .arg(file_path)
+            .spawn()?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let uri = url::Url::from_file_path(file_path)
+            .map_err(|_| std::io::Error::other("Invalid file URI"))?;
+        let selected = Command::new("dbus-send")
+            .args([
+                "--session",
+                "--print-reply",
+                "--reply-timeout=1000",
+                "--dest=org.freedesktop.FileManager1",
+                "/org/freedesktop/FileManager1",
+                "org.freedesktop.FileManager1.ShowItems",
+                &format!("array:string:{uri}"),
+                "string:",
+            ])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        if !selected.is_ok_and(|s| s.success()) {
+            open_folder_in_os(file_path.parent().unwrap_or(file_path))?;
+        }
+    }
+    Ok(())
 }
 
-fn open_file_in_os(file_path: &Path) {
+fn open_file_in_os(file_path: &Path) -> std::io::Result<()> {
     #[cfg(target_os = "windows")]
     {
         let canonical = dunce_norm(file_path);
-        let _ = Command::new("explorer.exe").arg(canonical).spawn();
+        Command::new("explorer.exe").arg(canonical).spawn()?;
     }
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("/usr/bin/open").arg(file_path).spawn()?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        Command::new("xdg-open").arg(file_path).spawn()?;
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "windows")]

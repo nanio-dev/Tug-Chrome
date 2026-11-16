@@ -4,6 +4,7 @@
 pub const HOST_NAME: &str = "cc.nanio.tug.agent";
 
 /// 自定义 URL 协议名称（tug-agent://）。
+#[cfg(windows)]
 pub const PROTOCOL_SCHEME: &str = "tug-agent";
 
 /// 本地无状态 HTTP 网关默认监听端口。
