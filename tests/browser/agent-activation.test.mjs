@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {it} from 'node:test';
 import {launchHarness,rpc,waitUntil} from '../../scripts/browser-test-utils.mjs';
 
-async function withBackground(mode,run){
+async function withBackground(mode,run,installState){
  const h=await launchHarness();try{
  const worker=h.context.serviceWorkers()[0];
  await worker.evaluate(({mode})=>{
@@ -21,6 +21,7 @@ async function withBackground(mode,run){
    return {onMessage:{addListener:fn=>callbacks.push(fn)},onDisconnect:{addListener:()=>{}},disconnect:()=>globalThis.nativeCalls.disconnects++,postMessage:()=>queueMicrotask(()=>callbacks.forEach(fn=>fn(mode==='old'?{ok:true,type:'ready'}:{ok:true,protocolVersion:2,token:'ab'.repeat(32)})))};
   };
  },{mode});
+ if(installState)await worker.evaluate(state=>chrome.storage.session.set({tugAgentInstallSession:{state}}),installState);
  const p=await h.openPage();await rpc(p,'update_settings',{standaloneMode:false,locale:'en-US'});await run({h,p,worker});
  }finally{await h.close();}
 }
@@ -129,6 +130,14 @@ it('guides Unix manual installation and closes automatically after the Agent con
    await p.evaluate(()=>window.connected=true);await p.locator('.modal-backdrop').waitFor({state:'hidden'});await p.close();
   }
  }finally{await h.close();}
+});
+
+it('persists successful Unix installation so the next popup does not restore the installer',async()=>{
+ for(const installer of ['macos','linux'])await withBackground('ready',async({p})=>{
+  assert.equal((await rpc(p,'get_agent_install_state')).phase,'need_manual_launch');
+  assert.equal((await rpc(p,'ensure_native_helper')).available,true);
+  assert.equal((await rpc(p,'get_agent_install_state')).phase,'ready');
+ },{phase:'need_manual_launch',installer,downloadId:123,bytesReceived:10,totalBytes:10});
 });
 
 it('silently reconnects an already paired browser and automatically closes the activation dialog',async()=>{

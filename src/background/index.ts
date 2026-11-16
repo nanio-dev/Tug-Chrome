@@ -861,13 +861,19 @@ async function handleBackgroundCommand(req: ExtensionRequest): Promise<unknown> 
       }
       return status;
     }
-    case "ensure_native_helper":
+    case "ensure_native_helper": {
       if (cachedSettings.standaloneMode) {
         return { available: false, standaloneMode: true };
       }
-      return ensureNativeHelperRunning(
+      const status = await ensureNativeHelperRunning(
         req.payload as { allowProtocolFallback?: boolean } | undefined,
       );
+      if (status.available && ["need_pairing", "need_manual_launch", "waiting_ready", "launching"].includes(agentInstallState.phase)) {
+        setAgentInstallState({ ...agentInstallState, phase: "ready", message: undefined });
+        setAgentReadyBadge(false);
+      }
+      return status;
+    }
     case "activate_native_helper_protocol": {
       const status = await activateNativeHelperViaProtocol((req.payload as { protocolTabId?: number })?.protocolTabId);
       if (status.available) setAgentInstallState({ ...agentInstallState, phase: "ready", message: undefined });
