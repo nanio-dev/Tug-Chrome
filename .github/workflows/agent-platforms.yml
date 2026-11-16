@@ -37,7 +37,7 @@ jobs:
           rustc --target ${{ matrix.target }} -C linker=rust-lld -C link-self-contained=yes /tmp/tug-target-check.rs -o /tmp/tug-target-check
           /tmp/tug-target-check
       - uses: Swatinem/rust-cache@v2
-        with: {workspaces: 'agent', key: '${{ matrix.target }}'}
+        with: {workspaces: 'agent', key: '${{ matrix.target }}', cache-on-failure: true}
       - run: cargo clippy --manifest-path agent/Cargo.toml --locked --target ${{ matrix.target }} --all-targets -- -D warnings
       - run: cargo test --manifest-path agent/Cargo.toml --locked --target ${{ matrix.target }}
       - run: cargo build --manifest-path agent/Cargo.toml --release --locked --target ${{ matrix.target }}

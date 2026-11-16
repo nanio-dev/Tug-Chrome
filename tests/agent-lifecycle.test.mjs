@@ -6,7 +6,7 @@ import {spawn} from 'node:child_process';
 import {once} from 'node:events';
 import {it} from 'node:test';
 const exe=process.env.TUG_TEST_AGENT||path.resolve('agent/target/debug/'+(process.platform==='win32'?'tug-agent.exe':'tug-agent'));
-async function fixture(){const root=await fs.mkdtemp(path.join(os.tmpdir(),'tug-lifecycle-'));for(const d of ['AppData','Tmp'])await fs.mkdir(path.join(root,d));return{root,env:{...process.env,LOCALAPPDATA:path.join(root,'AppData'),USERPROFILE:root,HOME:root,TMP:path.join(root,'Tmp'),TEMP:path.join(root,'Tmp')}};}
+async function fixture(){const root=await fs.mkdtemp(path.join(os.tmpdir(),'tug-lifecycle-'));for(const d of ['AppData','Tmp'])await fs.mkdir(path.join(root,d));return{root,env:{...process.env,LOCALAPPDATA:path.join(root,'AppData'),USERPROFILE:root,HOME:root,XDG_DATA_HOME:path.join(root,'Data'),XDG_CONFIG_HOME:path.join(root,'Config'),TMP:path.join(root,'Tmp'),TEMP:path.join(root,'Tmp')}};}
 async function ready(child){let buffer=Buffer.alloc(0);return new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('No native ready')),5000);child.once('error',reject);child.stdout.on('data',d=>{buffer=Buffer.concat([buffer,d]);if(buffer.length>=4&&buffer.length>=4+buffer.readUInt32LE()){clearTimeout(timer);resolve(JSON.parse(buffer.subarray(4,4+buffer.readUInt32LE())));}});});}
 async function cleanup(f){assert.ok(path.basename(f.root).startsWith('tug-lifecycle-'));assert.equal(path.dirname(f.root),os.tmpdir());await fs.rm(f.root,{recursive:true,force:true,maxRetries:12,retryDelay:300});}
 it('exits when idle even with native stdin open and repeated health checks',{timeout:10000},async()=>{

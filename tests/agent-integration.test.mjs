@@ -13,7 +13,7 @@ it("authorizes the real Agent over native stdio and publishes complete exports a
   for (const sub of ["Downloads", "AppData", "Tmp"]) await fs.mkdir(path.join(temp, sub));
   const exe = process.env.TUG_TEST_AGENT || path.join(root, "agent/target/debug", process.platform === "win32" ? "tug-agent.exe" : "tug-agent");
   const child = spawn(exe, ["--serve-only", "--native-stdio", "--port=0"], {
-    windowsHide: true, env: { ...process.env, USERPROFILE: temp, HOME: temp, LOCALAPPDATA: path.join(temp, "AppData"), TEMP: path.join(temp, "Tmp"), TMP: path.join(temp, "Tmp") },
+    windowsHide: true, env: { ...process.env, USERPROFILE: temp, HOME: temp, XDG_DATA_HOME: path.join(temp,"Data"), XDG_CONFIG_HOME: path.join(temp,"Config"), LOCALAPPDATA: path.join(temp, "AppData"), TEMP: path.join(temp, "Tmp"), TMP: path.join(temp, "Tmp") },
   });
   let frames = Buffer.alloc(0), stderr = "";
   child.stderr.on("data", data => { stderr += data; });
@@ -70,6 +70,8 @@ it("authorizes the real Agent over native stdio and publishes complete exports a
     await new Promise(resolve => setTimeout(resolve, 100));
     const names = await fs.readdir(path.join(temp, "Downloads/Tug"));
     assert.equal(names.some(n => n.includes("aborted") || n.startsWith(".tmp")), false);
+  } catch (error) {
+    throw new Error(`Agent integration failed: ${error.message}; cause=${error.cause?.message ?? ''}; exit=${child.exitCode}; signal=${child.signalCode}; stderr=${stderr}`, {cause:error});
   } finally {
     child.kill();
     if (child.exitCode === null && child.signalCode === null) await once(child, "exit");
