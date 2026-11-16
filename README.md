@@ -9,13 +9,11 @@
   <a href="LICENSE"><img alt="Apache-2.0" src="https://img.shields.io/badge/License-Apache--2.0-blue"></a>
 </p>
 <p align="center"><b>简体中文</b> · <a href="README.en.md">English</a></p>
-<p align="center"><a href="https://github.com/nanio-dev/Tug-Web/releases/tag/last">下载当前构建 · last</a> · <a href="https://github.com/nanio-dev/Tug-Desktop">Windows 版</a> · <a href="https://github.com/nanio-dev/Tug-Android">Android 版</a></p>
+<p align="center"><a href="https://github.com/nanio-dev/Tug-Web/releases/tag/last">最新版本</a> · <a href="https://github.com/nanio-dev/Tug-Desktop">Windows 版</a> · <a href="https://github.com/nanio-dev/Tug-Android">Android 版</a></p>
 
 Tug Web 是独立运行的 Chromium 浏览器下载扩展。在 Chrome、Edge 等兼容浏览器中集中管理下载，支持 HTTP/HTTPS 多连接、暂停续传、种子与磁力链接。无需安装 Tug Desktop，即可使用浏览器下载能力。
 
 ## 下载
-
-所有下载均来自本仓库固定的 [last Release](https://github.com/nanio-dev/Tug-Web/releases/tag/last)。后续发布覆盖同名附件，不按版本号创建历史 Release；以下链接始终指向当前构建。
 
 | 文件 | 用途 |
 |---|---|
