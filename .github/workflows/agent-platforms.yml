@@ -69,7 +69,10 @@ jobs:
       - run: |
           lipo -create build/x64/tug-agent build/arm64/tug-agent -output build/tug-agent
           chmod +x build/tug-agent
-          lipo -verify_arch x86_64 arm64 build/tug-agent
+          lipo build/tug-agent -verify_arch x86_64 arm64
           node scripts/package-agent-unix.mjs macos universal build/tug-agent out
+          ditto -x -k out/tug-agent-macos-universal.zip build/unpacked
+          codesign --verify --strict "build/unpacked/Tug Agent.app"
+          TUG_TEST_AGENT="$PWD/build/unpacked/Tug Agent.app/Contents/MacOS/tug-agent" node --test tests/agent-*.test.mjs
       - uses: actions/upload-artifact@v4
         with: {name: agent-macos-universal, path: 'out/tug-agent-macos-universal.zip', retention-days: 14}
