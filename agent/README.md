@@ -4,7 +4,7 @@ Tug Agent 为 Tug Web 提供可选的 Windows 本地能力：传统 BitTorrent T
 
 ## 使用
 
-从 [Tug 官网](https://tug.nanio.cc/#browser) 下载辅助组件，按扩展中的引导完成启用与配对。普通 HTTP/HTTPS 下载可以使用纯浏览器模式。仅支持 Windows x64；建议与扩展同步更新。
+从 [GitHub last Release](https://github.com/nanio-dev/Tug-Web/releases/download/last/tug-agent.exe) 下载辅助组件，按扩展中的引导完成启用与配对。普通 HTTP/HTTPS 下载可以使用纯浏览器模式。仅支持 Windows x64；建议与扩展同步更新。
 
 ## 构建
 
@@ -12,6 +12,6 @@ Tug Agent 为 Tug Web 提供可选的 Windows 本地能力：传统 BitTorrent T
 
 ## Companion component
 
-Tug Agent optionally adds traditional BT connectivity and system file export/open/reveal to Tug Web on Windows x64. Browser-only mode is available for ordinary HTTP/HTTPS downloads. Download it from the [Tug website](https://tug.nanio.cc/#browser) and follow the extension's pairing flow.
+Tug Agent optionally adds traditional BT connectivity and system file export/open/reveal to Tug Web on Windows x64. Browser-only mode is available for ordinary HTTP/HTTPS downloads. Download it from the [GitHub last release](https://github.com/nanio-dev/Tug-Web/releases/download/last/tug-agent.exe) and follow the extension's pairing flow.
 
 Build with `build.bat`, or run the root `packer.bat` to package both components. Licensed under [Apache-2.0](../LICENSE).
