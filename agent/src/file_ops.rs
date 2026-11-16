@@ -484,18 +484,28 @@ pub async fn handle_fs_delete(
     )
 }
 
+fn spawn_desktop(command: &mut Command) -> std::io::Result<()> {
+    // A native host's stdout is reserved for framed JSON, never desktop helper output.
+    command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()?;
+    Ok(())
+}
+
 fn open_folder_in_os(folder: &Path) -> std::io::Result<()> {
     #[cfg(target_os = "windows")]
     {
-        Command::new("explorer.exe").arg(folder).spawn()?;
+        spawn_desktop(Command::new("explorer.exe").arg(folder))?;
     }
     #[cfg(target_os = "macos")]
     {
-        Command::new("/usr/bin/open").arg(folder).spawn()?;
+        spawn_desktop(Command::new("/usr/bin/open").arg(folder))?;
     }
     #[cfg(target_os = "linux")]
     {
-        Command::new("xdg-open").arg(folder).spawn()?;
+        spawn_desktop(Command::new("xdg-open").arg(folder))?;
     }
     Ok(())
 }
@@ -504,16 +514,11 @@ fn reveal_file_in_os(file_path: &Path) -> std::io::Result<()> {
     #[cfg(target_os = "windows")]
     {
         let canonical = dunce_norm(file_path);
-        Command::new("explorer.exe")
-            .raw_arg(format!("/select,\"{}\"", canonical))
-            .spawn()?;
+        spawn_desktop(Command::new("explorer.exe").raw_arg(format!("/select,\"{}\"", canonical)))?;
     }
     #[cfg(target_os = "macos")]
     {
-        Command::new("/usr/bin/open")
-            .arg("-R")
-            .arg(file_path)
-            .spawn()?;
+        spawn_desktop(Command::new("/usr/bin/open").arg("-R").arg(file_path))?;
     }
     #[cfg(target_os = "linux")]
     {
@@ -544,15 +549,15 @@ fn open_file_in_os(file_path: &Path) -> std::io::Result<()> {
     #[cfg(target_os = "windows")]
     {
         let canonical = dunce_norm(file_path);
-        Command::new("explorer.exe").arg(canonical).spawn()?;
+        spawn_desktop(Command::new("explorer.exe").arg(canonical))?;
     }
     #[cfg(target_os = "macos")]
     {
-        Command::new("/usr/bin/open").arg(file_path).spawn()?;
+        spawn_desktop(Command::new("/usr/bin/open").arg(file_path))?;
     }
     #[cfg(target_os = "linux")]
     {
-        Command::new("xdg-open").arg(file_path).spawn()?;
+        spawn_desktop(Command::new("xdg-open").arg(file_path))?;
     }
     Ok(())
 }
