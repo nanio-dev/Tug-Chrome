@@ -2,7 +2,7 @@
 
 [简体中文](README.md) · **English**
 
-Tug Agent adds traditional BitTorrent TCP/UDP/DHT connectivity and system file saving, opening and reveal to Tug Web on Windows, macOS and Linux.
+Tug Agent adds traditional BitTorrent TCP/UDP/DHT connectivity and system file saving, opening and reveal to Tug on Windows, macOS and Linux.
 
 ## Installation and use
 
@@ -10,10 +10,10 @@ Follow the extension's Agent setup flow, or download the package for your platfo
 
 | Platform | Download | First installation |
 |---|---|---|
-| Windows x64 | [tug-agent.exe](https://github.com/nanio-dev/Tug-Web/releases/download/last/tug-agent.exe) | Download and run |
-| macOS Intel / Apple Silicon | [Universal app](https://github.com/nanio-dev/Tug-Web/releases/download/last/tug-agent-macos-universal.zip) | Extract and open `Tug Agent.app` |
-| Linux x64 | [Installer](https://github.com/nanio-dev/Tug-Web/releases/download/last/tug-agent-linux-x64.tar.gz) | Extract and run `sh install.sh` in that folder |
-| Linux ARM64 | [Installer](https://github.com/nanio-dev/Tug-Web/releases/download/last/tug-agent-linux-arm64.tar.gz) | Extract and run `sh install.sh` in that folder |
+| Windows x64 | [tug-agent.exe](https://github.com/nanio-dev/Tug-Chrome/releases/download/last/tug-agent.exe) | Download and run |
+| macOS Intel / Apple Silicon | [Universal app](https://github.com/nanio-dev/Tug-Chrome/releases/download/last/tug-agent-macos-universal.zip) | Extract and open `Tug Agent.app` |
+| Linux x64 | [Installer](https://github.com/nanio-dev/Tug-Chrome/releases/download/last/tug-agent-linux-x64.tar.gz) | Extract and run `sh install.sh` in that folder |
+| Linux ARM64 | [Installer](https://github.com/nanio-dev/Tug-Chrome/releases/download/last/tug-agent-linux-arm64.tar.gz) | Extract and run `sh install.sh` in that folder |
 
 On macOS, first launch may require approval in System Settings → Privacy & Security. On Linux, install as your desktop user without `sudo`; sandboxed Snap/Flatpak browsers are not currently supported.
 

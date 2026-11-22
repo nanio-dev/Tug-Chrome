@@ -4,7 +4,7 @@ version = "1.0.0"
 edition = "2024"
 license = "Apache-2.0"
 authors = ["Tug contributors"]
-description = "Stateless BitTorrent/DHT/TCP/uTP local agent for Tug Web browser extension"
+description = "Stateless BitTorrent/DHT/TCP/uTP local agent for Tug browser extension"
 
 [dependencies]
 anyhow = "1"

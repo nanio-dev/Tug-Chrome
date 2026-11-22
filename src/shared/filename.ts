@@ -204,7 +204,7 @@ export interface DownloadInterceptCandidate {
 }
 
 /**
- * 判断浏览器下载项是否应当由 Tug Web 接管。
+ * 判断浏览器下载项是否应当由 Tug 接管。
  */
 export function shouldInterceptBrowserDownload(
   item: DownloadInterceptCandidate,

@@ -1086,22 +1086,22 @@ function registerContextMenus(): void {
   chrome.contextMenus.removeAll(() => {
     chrome.contextMenus.create({
       id: "tug-download-link",
-      title: chrome.i18n.getMessage("ctxDownloadLink") || "使用 Tug Web 下载此链接",
+      title: chrome.i18n.getMessage("ctxDownloadLink") || "使用 Tug 下载此链接",
       contexts: ["link"],
     });
     chrome.contextMenus.create({
       id: "tug-download-media",
-      title: chrome.i18n.getMessage("ctxDownloadMedia") || "使用 Tug Web 下载此媒体",
+      title: chrome.i18n.getMessage("ctxDownloadMedia") || "使用 Tug 下载此媒体",
       contexts: ["image", "video", "audio"],
     });
     chrome.contextMenus.create({
       id: "tug-download-selection",
-      title: chrome.i18n.getMessage("ctxDownloadSelection") || "使用 Tug Web 下载选中链接/磁力",
+      title: chrome.i18n.getMessage("ctxDownloadSelection") || "使用 Tug 下载选中链接/磁力",
       contexts: ["selection"],
     });
     chrome.contextMenus.create({
       id: "tug-open-manager",
-      title: chrome.i18n.getMessage("ctxOpenManager") || "打开 Tug Web 下载管理面板",
+      title: chrome.i18n.getMessage("ctxOpenManager") || "打开 Tug 下载管理面板",
       contexts: ["page", "action"],
     });
   });
@@ -1163,7 +1163,7 @@ chrome.contextMenus?.onClicked.addListener(async (info, tab) => {
   } catch (err) {
     // 若直加失败（如非支持的 URL），打开管理面板引导用户确认
     await openManagerTab(candidateUrl);
-    console.warn("[tug-web] Context menu add_task error:", err);
+    console.warn("[tug] Context menu add_task error:", err);
   }
 });
 
@@ -1206,13 +1206,13 @@ chrome.downloads?.onCreated.addListener(async (item) => {
       await chrome.downloads.cancel(item.id).catch(() => {});
       await chrome.downloads.erase({ id: item.id }).catch(() => {});
     } catch (err) {
-      console.warn("[tug-web] Intercept .torrent fallback:", err);
+      console.warn("[tug] Intercept .torrent fallback:", err);
     }
     return;
   }
 
   try {
-    // 先在 Tug Web 创建任务，成功后再取消原浏览器下载，确保绝不丢失下载
+    // 先在 Tug 创建任务，成功后再取消原浏览器下载，确保绝不丢失下载
     await forwardToOffscreen<TaskView, AddTaskInput>("add_task", {
       url: targetUrl,
       fileName: suggestedName !== "download" ? suggestedName : null,
@@ -1222,7 +1222,7 @@ chrome.downloads?.onCreated.addListener(async (item) => {
     await chrome.downloads.cancel(item.id).catch(() => {});
     await chrome.downloads.erase({ id: item.id }).catch(() => {});
   } catch (err) {
-    console.warn("[tug-web] Intercept fallback to browser download:", err);
+    console.warn("[tug] Intercept fallback to browser download:", err);
   }
 });
 
@@ -1346,9 +1346,9 @@ chrome.runtime.onStartup.addListener(() => {
 });
 
 // 定时保活检查（当有活动任务时确保 Offscreen 宿主存活）
-chrome.alarms?.create("tug-web-keepalive", { periodInMinutes: 0.4 });
+chrome.alarms?.create("tug-keepalive", { periodInMinutes: 0.4 });
 chrome.alarms?.onAlarm.addListener((alarm) => {
-  if (alarm.name === "tug-web-keepalive") {
+  if (alarm.name === "tug-keepalive") {
     void ensureOffscreenDocument().catch(() => {});
     void loadCachedSettings().then((settings) => {
       if (!settings.standaloneMode && !extIdRegisteredInSession) {

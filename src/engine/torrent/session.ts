@@ -807,7 +807,7 @@ class BrowserWebTorrentSwarm {
       dc.send(handshake);
 
       // 2. 发送 BEP 10 扩展握手（声明支持 ut_metadata = 1）
-      const extDict = encodeBencode({ m: { ut_metadata: 1 }, v: "Tug Web 1.0" });
+      const extDict = encodeBencode({ m: { ut_metadata: 1 }, v: "Tug 1.0" });
       const extPayload = new Uint8Array(1 + extDict.byteLength);
       extPayload[0] = 0; // extended handshake id = 0
       extPayload.set(extDict, 1);
@@ -853,7 +853,7 @@ class BrowserWebTorrentSwarm {
           } else if (peerIdAscii.startsWith("-TR")) {
             state.info.client = "Transmission";
           } else if (peerIdAscii.startsWith("-TW")) {
-            state.info.client = "Tug Web";
+            state.info.client = "Tug";
           }
           state.rxBuffer = state.rxBuffer.subarray(68);
           state.handshakeReceived = true;
@@ -1313,7 +1313,7 @@ async function runTorrentSession(options: TorrentDownloadOptions, group: AbortCo
           helperSessionId = helperRes.sessionId;
           helperWebSeedUrl = helperRes.webSeedUrl;
         } catch (err) {
-          console.warn("[tug-web] Start helper torrent session error:", err);
+          console.warn("[tug] Start helper torrent session error:", err);
         }
       }
     }
@@ -1551,7 +1551,7 @@ async function runTorrentSession(options: TorrentDownloadOptions, group: AbortCo
         );
         const hint =
           tcpOnlyTrackers.length > 0 && allWebSeeds.length === 0
-            ? `（该种子仅包含 ${tcpOnlyTrackers.length} 个传统 UDP/HTTP Tracker 且无 WebSeed 镜像，浏览器沙箱无法直连 TCP/UDP 节点；请开启或安装 Tug Web 本地辅助网关）`
+            ? `（该种子仅包含 ${tcpOnlyTrackers.length} 个传统 UDP/HTTP Tracker 且无 WebSeed 镜像，浏览器沙箱无法直连 TCP/UDP 节点；请开启或安装 Tug 本地辅助网关）`
             : "（当前无在线 WebRTC Peer 或 HTTP WebSeed 节点响应）";
 
         throw new Error(`无法获取种子分片 #${pieceIndex} ${hint}`);

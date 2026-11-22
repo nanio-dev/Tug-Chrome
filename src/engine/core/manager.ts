@@ -116,7 +116,7 @@ export class TaskManager {
     await this.ensureInitialized();
     const settings = await this.getSettings();
     return {
-      name: "Tug Web",
+      name: "Tug",
       version: "1.0.0",
       platform: typeof navigator !== "undefined" ? navigator.userAgent : "Node",
       storageEngine: this.partStore.name.toUpperCase(),

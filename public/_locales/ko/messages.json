@@ -1,8 +1,20 @@
 {
-  "extName": { "message": "Tug Web — 다중 연결 및 토렌트/마그넷 다운로더" },
-  "extDescription": { "message": "HTTP/HTTPS 다중 연결 가속, 다운로드 재개, 브라우저 다운로드 가져오기 및 BitTorrent/마그넷 링크를 지원하는 독립형 다운로드 관리 확장 프로그램입니다." },
-  "ctxDownloadLink": { "message": "Tug Web으로 링크 다운로드" },
-  "ctxDownloadMedia": { "message": "Tug Web으로 미디어 다운로드" },
-  "ctxDownloadSelection": { "message": "Tug Web으로 선택한 URL/마그넷 링크 다운로드" },
-  "ctxOpenManager": { "message": "Tug Web 다운로드 관리 패널 열기" }
+  "extName": {
+    "message": "Tug"
+  },
+  "extDescription": {
+    "message": "HTTP/HTTPS 다중 연결 가속, 다운로드 재개, 브라우저 다운로드 가져오기 및 BitTorrent/마그넷 링크를 지원하는 독립형 다운로드 관리 확장 프로그램입니다."
+  },
+  "ctxDownloadLink": {
+    "message": "Tug으로 링크 다운로드"
+  },
+  "ctxDownloadMedia": {
+    "message": "Tug으로 미디어 다운로드"
+  },
+  "ctxDownloadSelection": {
+    "message": "Tug으로 선택한 URL/마그넷 링크 다운로드"
+  },
+  "ctxOpenManager": {
+    "message": "Tug 다운로드 관리 패널 열기"
+  }
 }

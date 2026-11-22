@@ -1,7 +1,7 @@
 import type { Messages } from "./zh-CN";
 
 export const jaJP: Messages = {
-  "app.name": "Tug Web",
+  "app.name": "Tug",
   "app.tagline": "もっと速く、快適にダウンロード",
   "nav.overview": "概要",
   "nav.all": "すべてのタスク",
@@ -125,7 +125,7 @@ export const jaJP: Messages = {
   "settings.globalLimit": "全体の速度制限 (KiB/s)",
   "settings.globalLimitHint": "空欄または0で無制限",
   "settings.autoIntercept": "ブラウザーのダウンロードを自動で引き継ぐ",
-  "settings.autoInterceptHint": "サイズや種類の条件を満たすダウンロードをTug Webで引き継ぎ、高速化します。",
+  "settings.autoInterceptHint": "サイズや種類の条件を満たすダウンロードをTugで引き継ぎ、高速化します。",
   "settings.minSize": "引き継ぐファイルの最小サイズ (MiB)",
   "settings.minSizeHint": "これより小さいファイルはブラウザーで直接ダウンロードします（0ですべて対象）。",
   "settings.interceptMagnet": "ページ上のmagnet:リンクを引き継ぐ",
@@ -220,8 +220,8 @@ export const jaJP: Messages = {
   "sort.name": "名前",
   "about.version": "バージョン",
   "about.storageEngine": "ストレージエンジン",
-  "notification.completed": "Tug Web · ダウンロード完了",
-  "notification.failed": "Tug Web · ダウンロード失敗",
+  "notification.completed": "Tug · ダウンロード完了",
+  "notification.failed": "Tug · ダウンロード失敗",
   "agentInstall.interrupted": "セットアップが中断されました。接続を再試行してください。",
   "agentInstall.connectionFailed": "Agentに接続できません。起動を確認し、ブラウザーによるローカルアプリへの接続を許可してください。",
   "agentInstall.cacheExpired": "インストーラーのキャッシュが期限切れです。再ダウンロードしてください。",
@@ -230,7 +230,7 @@ export const jaJP: Messages = {
   "agentInstall.downloadTimeout": "ダウンロードの確認がタイムアウトしました。キャッシュ済みのインストーラーで再試行してください。",
   "agentInstall.downloadIncomplete": "ダウンロードが完了していません。再試行してください。",
   "agentInstall.notificationTitle": "Agentのダウンロード完了",
-  "agentInstall.notificationBody": "ツールバーのTug Webアイコンをクリックし、案内に従ってセットアップを完了してください。",
+  "agentInstall.notificationBody": "ツールバーのTugアイコンをクリックし、案内に従ってセットアップを完了してください。",
   "error.offscreen": "ダウンロードエンジンが応答していません。再試行してください。",
   "error.saveCancelled": "ファイルの書き出しをキャンセルしました。「再開」で再ダウンロードせずにやり直せます。",
   "error.saveTimeout": "ブラウザーへの書き出しがタイムアウトしました。「再開」で再ダウンロードせずにやり直せます。",

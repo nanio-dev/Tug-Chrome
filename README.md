@@ -1,5 +1,5 @@
 <h1 align="center">
-  <img src="public/tug-icon.png" width="40" alt="Tug Web 图标"> Tug Web
+  <img src="public/tug-icon.png" width="40" alt="Tug 图标"> Tug-Chrome
 </h1>
 
 <p align="center">浏览器里的下载工作台 · 多连接 · 断点续传 · BitTorrent / 磁力链接</p>
@@ -9,28 +9,28 @@
   <a href="LICENSE"><img alt="Apache-2.0" src="https://img.shields.io/badge/License-Apache--2.0-blue"></a>
 </p>
 <p align="center"><b>简体中文</b> · <a href="README.en.md">English</a></p>
-<p align="center"><a href="https://github.com/nanio-dev/Tug-Web/releases/tag/last">最新版本</a> · <a href="https://github.com/nanio-dev/Tug-Desktop">Windows 版</a> · <a href="https://github.com/nanio-dev/Tug-Android">Android 版</a></p>
+<p align="center"><a href="https://github.com/nanio-dev/Tug-Chrome/releases/tag/last">最新版本</a> · <a href="https://github.com/nanio-dev/Tug-Desktop">Windows 版</a> · <a href="https://github.com/nanio-dev/Tug-Android">Android 版</a></p>
 
-Tug Web 是独立运行的 Chromium 浏览器下载扩展。在 Chrome、Edge 等兼容浏览器中集中管理下载，支持 HTTP/HTTPS 多连接、暂停续传、种子与磁力链接。无需安装 Tug Desktop，即可使用浏览器下载能力。
+Tug 是独立运行的 Chromium 浏览器下载扩展。在 Chrome、Edge 等兼容浏览器中集中管理下载，支持 HTTP/HTTPS 多连接、暂停续传、种子与磁力链接。无需安装 Tug Desktop，即可使用浏览器下载能力。
 
 ## 下载
 
 | 文件 | 用途 |
 |---|---|
-| [浏览器扩展 CRX](https://github.com/nanio-dev/Tug-Web/releases/download/last/tug-web.crx) | CRX3 签名扩展包，安装方式取决于浏览器策略 |
-| [Tug Agent · Windows x64](https://github.com/nanio-dev/Tug-Web/releases/download/last/tug-agent.exe) | 可选；补充传统 BT 连接、系统文件保存与定位能力 |
-| [Tug Agent · macOS](https://github.com/nanio-dev/Tug-Web/releases/download/last/tug-agent-macos-universal.zip) | Intel / Apple Silicon 通用应用包 |
-| [Tug Agent · Linux x64](https://github.com/nanio-dev/Tug-Web/releases/download/last/tug-agent-linux-x64.tar.gz) | 解压后运行 `sh install.sh`，无需 sudo |
-| [Tug Agent · Linux ARM64](https://github.com/nanio-dev/Tug-Web/releases/download/last/tug-agent-linux-arm64.tar.gz) | 解压后运行 `sh install.sh`，无需 sudo |
-| [发布记录](https://github.com/nanio-dev/Tug-Web/releases/download/last/release.json) | 构建提交、时间与文件校验信息 |
-| [SHA256SUMS.txt](https://github.com/nanio-dev/Tug-Web/releases/download/last/SHA256SUMS.txt) | 下载文件校验值 |
+| [浏览器扩展 CRX](https://github.com/nanio-dev/Tug-Chrome/releases/download/last/tug.crx) | CRX3 签名扩展包，安装方式取决于浏览器策略 |
+| [Tug Agent · Windows x64](https://github.com/nanio-dev/Tug-Chrome/releases/download/last/tug-agent.exe) | 可选；补充传统 BT 连接、系统文件保存与定位能力 |
+| [Tug Agent · macOS](https://github.com/nanio-dev/Tug-Chrome/releases/download/last/tug-agent-macos-universal.zip) | Intel / Apple Silicon 通用应用包 |
+| [Tug Agent · Linux x64](https://github.com/nanio-dev/Tug-Chrome/releases/download/last/tug-agent-linux-x64.tar.gz) | 解压后运行 `sh install.sh`，无需 sudo |
+| [Tug Agent · Linux ARM64](https://github.com/nanio-dev/Tug-Chrome/releases/download/last/tug-agent-linux-arm64.tar.gz) | 解压后运行 `sh install.sh`，无需 sudo |
+| [发布记录](https://github.com/nanio-dev/Tug-Chrome/releases/download/last/release.json) | 构建提交、时间与文件校验信息 |
+| [SHA256SUMS.txt](https://github.com/nanio-dev/Tug-Chrome/releases/download/last/SHA256SUMS.txt) | 下载文件校验值 |
 
 ### 开始使用
 
 1. 下载签名的扩展 CRX，并打开浏览器扩展管理页面。
 2. 在支持手动 CRX 的浏览器中，按浏览器指引导入；是否允许安装取决于浏览器与管理策略。
 3. Chrome 在 Windows/macOS 上限制非商店扩展，通常需要受管理的企业部署策略。开发者可从源码构建后，在开发者模式下加载 `dist/extension/`。
-4. 将 Tug Web 固定到工具栏，通过弹出面板添加链接，或打开管理面板查看全部下载。
+4. 将 Tug 固定到工具栏，通过弹出面板添加链接，或打开管理面板查看全部下载。
 
 普通 HTTP/HTTPS 下载和兼容的 WebTorrent/WebSeed 任务可使用纯浏览器模式。需要连接传统 BT 的 TCP/UDP/DHT 节点，或使用系统文件导出与定位时，可按扩展内引导启用 **Tug Agent 辅助组件**。组件支持 Windows、macOS 和 Linux。
 
@@ -75,14 +75,14 @@ Windows 可双击 `build.bat` 构建扩展，产物为 `dist/extension/`（`dist
 
 | 文件 | 内容 |
 |---|---|
-| `tug-web.crx` | 正式签名的 CRX3 / Manifest V3 扩展 |
+| `tug.crx` | 正式签名的 CRX3 / Manifest V3 扩展 |
 | `tug-agent.exe` | Windows Release 辅助组件 |
 | `tug-agent-macos-universal.zip` | macOS Intel / Apple Silicon 通用应用 |
 | `tug-agent-linux-x64.tar.gz`、`tug-agent-linux-arm64.tar.gz` | Linux 安装包 |
 | `release.json` | 版本、构建提交、文件大小与 SHA-256 |
 | `SHA256SUMS.txt` | 校验值文本 |
 
-签名私钥首次生成在本地 `.local/tug-web-signing.pem`，后续打包会复用以保持扩展 ID。请备份私钥；它不会进入 Git 或 `out/`。也可通过 `TUG_EXTENSION_SIGNING_KEY` 指定已有私钥。
+签名私钥首次生成在本地 `.local/tug-signing.pem`，后续打包会复用以保持扩展 ID。请备份私钥；它不会进入 Git 或 `out/`。也可通过 `TUG_EXTENSION_SIGNING_KEY` 指定已有私钥。
 
 Mac/Linux 产物在 GitHub Actions 的原生环境构建并运行测试。打包需要已登录 GitHub CLI，自动获取与 Agent 源码提交匹配的成功构建产物；缺失或失败时停止发布。Mac/Linux 本地构建可运行 `sh agent/build.sh`。后续统一通过 `web/push.bat --no-pause` 构建、打包、上传和校验。
 
@@ -102,7 +102,7 @@ npm run test:browser
 npm run test:agent
 ```
 
-发现问题可提交 [Issue](https://github.com/nanio-dev/Tug-Web/issues)。
+发现问题可提交 [Issue](https://github.com/nanio-dev/Tug-Chrome/issues)。
 
 ## 许可证
 

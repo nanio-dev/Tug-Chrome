@@ -2,13 +2,13 @@ import { createRequestId, type ExtensionRequest, type ExtensionResponse } from "
 import type { AddTaskInput, Settings } from "../shared/types";
 
 function showPageToast(text: string, isError = false): void {
-  const existing = document.getElementById("tug-web-toast");
+  const existing = document.getElementById("tug-toast");
   if (existing) {
     existing.remove();
   }
 
   const toast = document.createElement("div");
-  toast.id = "tug-web-toast";
+  toast.id = "tug-toast";
   toast.textContent = text;
   Object.assign(toast.style, {
     position: "fixed",
@@ -116,17 +116,17 @@ document.addEventListener(
         (resp: ExtensionResponse<{ startedDirectly?: boolean }> | undefined) => {
           if (chrome.runtime.lastError || !resp || !resp.ok) {
             showPageToast(
-              `Tug Web 添加失败：${resp && !resp.ok ? resp.error.message : "请重试"}`,
+              `Tug 添加失败：${resp && !resp.ok ? resp.error.message : "请重试"}`,
               true,
             );
             return;
           }
           if (isMagnet) {
-            showPageToast("已交由 Tug Web 下载磁力链接");
+            showPageToast("已交由 Tug 下载磁力链接");
           } else if (resp.data?.startedDirectly) {
-            showPageToast("已交由 Tug Web 开始下载种子任务");
+            showPageToast("已交由 Tug 开始下载种子任务");
           } else {
-            showPageToast("已打开 Tug Web，请确认要下载的种子文件");
+            showPageToast("已打开 Tug，请确认要下载的种子文件");
           }
         },
       );

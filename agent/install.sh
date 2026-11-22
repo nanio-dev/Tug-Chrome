@@ -8,4 +8,4 @@ fi
 cd "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 chmod u+x ./tug-agent
 ./tug-agent --install
-printf '%s\n' 'Tug Agent installed. Return to Tug Web; the extension will connect automatically.'
+printf '%s\n' 'Tug Agent installed. Return to Tug; the extension will connect automatically.'

@@ -1,8 +1,20 @@
 {
-  "extName": { "message": "Tug Web — 多連線與種子／磁力下載器" },
-  "extDescription": { "message": "獨立的瀏覽器下載管理擴充功能，支援 HTTP/HTTPS 多連線加速、續傳、下載接管及 BitTorrent／磁力連結。" },
-  "ctxDownloadLink": { "message": "使用 Tug Web 下載此連結" },
-  "ctxDownloadMedia": { "message": "使用 Tug Web 下載此媒體" },
-  "ctxDownloadSelection": { "message": "使用 Tug Web 下載選取的連結／磁力連結" },
-  "ctxOpenManager": { "message": "開啟 Tug Web 下載管理面板" }
+  "extName": {
+    "message": "Tug"
+  },
+  "extDescription": {
+    "message": "獨立的瀏覽器下載管理擴充功能，支援 HTTP/HTTPS 多連線加速、續傳、下載接管及 BitTorrent／磁力連結。"
+  },
+  "ctxDownloadLink": {
+    "message": "使用 Tug 下載此連結"
+  },
+  "ctxDownloadMedia": {
+    "message": "使用 Tug 下載此媒體"
+  },
+  "ctxDownloadSelection": {
+    "message": "使用 Tug 下載選取的連結／磁力連結"
+  },
+  "ctxOpenManager": {
+    "message": "開啟 Tug 下載管理面板"
+  }
 }

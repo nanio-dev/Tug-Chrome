@@ -540,7 +540,7 @@ export function SettingsView({
                 </div>
               </div>
               <div className="hint">
-                Apache License 2.0 · Tug Family (Tug Desktop · Tug Android · Tug Web)
+                Apache License 2.0 · Tug Family (Tug Desktop · Tug Android · Tug)
               </div>
 
               <div className="field" style={{ marginTop: "6px" }}>

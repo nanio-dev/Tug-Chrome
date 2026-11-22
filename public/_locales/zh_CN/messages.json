@@ -1,6 +1,6 @@
 {
   "extName": {
-    "message": "Tug Web — 多线程与 BT/磁力下载器",
+    "message": "Tug",
     "description": "Extension name"
   },
   "extDescription": {
@@ -8,19 +8,19 @@
     "description": "Extension description"
   },
   "ctxDownloadLink": {
-    "message": "使用 Tug Web 下载此链接",
+    "message": "使用 Tug 下载此链接",
     "description": "Context menu for links"
   },
   "ctxDownloadMedia": {
-    "message": "使用 Tug Web 下载此媒体",
+    "message": "使用 Tug 下载此媒体",
     "description": "Context menu for media"
   },
   "ctxDownloadSelection": {
-    "message": "使用 Tug Web 下载选中链接/磁力",
+    "message": "使用 Tug 下载选中链接/磁力",
     "description": "Context menu for selected text"
   },
   "ctxOpenManager": {
-    "message": "打开 Tug Web 下载管理面板",
+    "message": "打开 Tug 下载管理面板",
     "description": "Context menu to open manager"
   }
 }

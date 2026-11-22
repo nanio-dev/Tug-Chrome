@@ -1,7 +1,7 @@
 import type { Messages } from "./zh-CN";
 
 export const zhTW: Messages = {
-  "app.name": "Tug Web",
+  "app.name": "Tug",
   "app.tagline": "多連線加速，暢快下載",
   "nav.overview": "總覽",
   "nav.all": "全部任務",
@@ -125,7 +125,7 @@ export const zhTW: Messages = {
   "settings.globalLimit": "總速度上限 (KiB/s)",
   "settings.globalLimitHint": "留空或 0 表示不限速",
   "settings.autoIntercept": "自動接管瀏覽器的新下載",
-  "settings.autoInterceptHint": "自動接管符合大小與類型規則的下載，交由 Tug Web 多連線加速。",
+  "settings.autoInterceptHint": "自動接管符合大小與類型規則的下載，交由 Tug 多連線加速。",
   "settings.minSize": "自動接管的最小檔案大小 (MiB)",
   "settings.minSizeHint": "較小的檔案由瀏覽器直接下載（0 表示全部接管）。",
   "settings.interceptMagnet": "攔截網頁上的 magnet: 磁力連結點擊",
@@ -220,8 +220,8 @@ export const zhTW: Messages = {
   "sort.name": "名稱",
   "about.version": "版本",
   "about.storageEngine": "儲存引擎",
-  "notification.completed": "Tug Web · 下載完成",
-  "notification.failed": "Tug Web · 下載失敗",
+  "notification.completed": "Tug · 下載完成",
+  "notification.failed": "Tug · 下載失敗",
   "agentInstall.interrupted": "安裝流程已中斷，請重試連線。",
   "agentInstall.connectionFailed": "無法連接 Agent，請確認程式已執行，並允許瀏覽器連接本機應用程式。",
   "agentInstall.cacheExpired": "安裝程式快取已過期，請重新下載。",
@@ -230,7 +230,7 @@ export const zhTW: Messages = {
   "agentInstall.downloadTimeout": "等待下載確認逾時，請重試；已快取的安裝程式無需重新取得。",
   "agentInstall.downloadIncomplete": "下載尚未完成，請重試。",
   "agentInstall.notificationTitle": "Agent 已下載",
-  "agentInstall.notificationBody": "點選瀏覽器工具列的 Tug Web 圖示，依引導完成安裝並啟用。",
+  "agentInstall.notificationBody": "點選瀏覽器工具列的 Tug 圖示，依引導完成安裝並啟用。",
   "error.offscreen": "下載引擎沒有回應，請重試。",
   "error.saveCancelled": "已取消檔案匯出。點選「繼續」可重試，無需重新下載。",
   "error.saveTimeout": "等待瀏覽器匯出逾時。點選「繼續」可重試，無需重新下載。",

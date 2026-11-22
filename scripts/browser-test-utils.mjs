@@ -23,7 +23,7 @@ export async function findBrowser() {
 export async function launchHarness({ ignoreHTTPSErrors = false, agentPort } = {}) {
   const tempRoot = process.env.TUG_TEST_TMPDIR || os.tmpdir();
   await fs.mkdir(tempRoot, { recursive: true });
-  const temp = await fs.mkdtemp(path.join(tempRoot, "tug-web-browser-"));
+  const temp = await fs.mkdtemp(path.join(tempRoot, "tug-browser-"));
   const extension = path.join(temp, "extension");
   await fs.cp(path.join(projectRoot, "dist"), extension, { recursive: true });
   const entry = path.join(temp, "entry.ts");
@@ -61,7 +61,7 @@ export async function launchHarness({ ignoreHTTPSErrors = false, agentPort } = {
     return page;
   }, async close() {
     await context.close();
-    if (path.dirname(path.resolve(temp)) !== path.resolve(tempRoot) || !path.basename(temp).startsWith("tug-web-browser-")) throw new Error("Unexpected test directory");
+    if (path.dirname(path.resolve(temp)) !== path.resolve(tempRoot) || !path.basename(temp).startsWith("tug-browser-")) throw new Error("Unexpected test directory");
     await fs.rm(temp, { recursive: true, force: true, maxRetries: 3 });
   } };
 }

@@ -9,7 +9,7 @@ run('git',['diff','--quiet','HEAD','--',...inputs]);
 const commit=run('git',['log','-1','--format=%H','--',...inputs]).trim();
 let build;
 for(let attempt=0;attempt<120;attempt++){
- const runs=JSON.parse(run('gh',['run','list','--repo','nanio-dev/Tug-Web','--workflow','agent-platforms.yml','--commit',commit,'--limit','5','--json','databaseId,status,conclusion']));
+ const runs=JSON.parse(run('gh',['run','list','--repo','nanio-dev/Tug-Chrome','--workflow','agent-platforms.yml','--commit',commit,'--limit','5','--json','databaseId,status,conclusion']));
  build=runs.find(r=>r.conclusion==='success');
  if(build)break;
  const active=runs.find(r=>r.status!=='completed');
@@ -22,7 +22,7 @@ const cacheRoot=path.join(root,'.local/agent-builds');await mkdir(cacheRoot,{rec
 const cache=await mkdtemp(path.join(cacheRoot,commit.slice(0,12)+'-'));
 for(const [artifact,file] of [['agent-macos-universal',UNIX_AGENTS[0]],['agent-linux-x64',UNIX_AGENTS[1]],['agent-linux-arm64',UNIX_AGENTS[2]]]){
  const dir=path.join(cache,artifact);
- run('gh',['run','download',String(build.databaseId),'--repo','nanio-dev/Tug-Web','--name',artifact,'--dir',dir]);
+ run('gh',['run','download',String(build.databaseId),'--repo','nanio-dev/Tug-Chrome','--name',artifact,'--dir',dir]);
  const bytes=await readFile(path.join(dir,file));
  if(!bytes.length||(file.endsWith('.zip')?bytes.readUInt16LE(0)!==0x4b50:bytes.readUInt16BE(0)!==0x1f8b))throw Error('Invalid native Agent archive: '+file);
  await mkdir(path.join(root,'out'),{recursive:true});await copyFile(path.join(dir,file),path.join(root,'out',file));

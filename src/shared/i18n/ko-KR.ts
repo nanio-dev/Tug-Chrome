@@ -1,7 +1,7 @@
 import type { Messages } from "./zh-CN";
 
 export const koKR: Messages = {
-  "app.name": "Tug Web",
+  "app.name": "Tug",
   "app.tagline": "더 빠르고 쾌적한 다운로드",
   "nav.overview": "개요",
   "nav.all": "모든 작업",
@@ -125,7 +125,7 @@ export const koKR: Messages = {
   "settings.globalLimit": "전체 속도 제한 (KiB/s)",
   "settings.globalLimitHint": "비워 두거나 0을 입력하면 무제한",
   "settings.autoIntercept": "새 브라우저 다운로드 자동으로 가져오기",
-  "settings.autoInterceptHint": "크기와 유형 조건에 맞는 브라우저 다운로드를 Tug Web으로 가져와 가속합니다.",
+  "settings.autoInterceptHint": "크기와 유형 조건에 맞는 브라우저 다운로드를 Tug으로 가져와 가속합니다.",
   "settings.minSize": "자동으로 가져올 최소 파일 크기 (MiB)",
   "settings.minSizeHint": "이보다 작은 파일은 브라우저가 직접 다운로드합니다 (0은 모든 파일).",
   "settings.interceptMagnet": "웹페이지의 magnet: 링크 클릭 가져오기",
@@ -220,8 +220,8 @@ export const koKR: Messages = {
   "sort.name": "이름",
   "about.version": "버전",
   "about.storageEngine": "저장 엔진",
-  "notification.completed": "Tug Web · 다운로드 완료",
-  "notification.failed": "Tug Web · 다운로드 실패",
+  "notification.completed": "Tug · 다운로드 완료",
+  "notification.failed": "Tug · 다운로드 실패",
   "agentInstall.interrupted": "설치가 중단되었습니다. 연결을 다시 시도하세요.",
   "agentInstall.connectionFailed": "Agent에 연결할 수 없습니다. 실행 중인지 확인하고 브라우저의 로컬 앱 연결을 허용하세요.",
   "agentInstall.cacheExpired": "설치 파일 캐시가 만료되었습니다. 다시 다운로드하세요.",
@@ -230,7 +230,7 @@ export const koKR: Messages = {
   "agentInstall.downloadTimeout": "다운로드 확인 시간이 초과되었습니다. 캐시된 설치 파일로 다시 시도하세요.",
   "agentInstall.downloadIncomplete": "다운로드가 완료되지 않았습니다. 다시 시도하세요.",
   "agentInstall.notificationTitle": "Agent 다운로드 완료",
-  "agentInstall.notificationBody": "브라우저 도구 모음의 Tug Web 아이콘을 누르고 안내에 따라 설치를 완료하세요.",
+  "agentInstall.notificationBody": "브라우저 도구 모음의 Tug 아이콘을 누르고 안내에 따라 설치를 완료하세요.",
   "error.offscreen": "다운로드 엔진이 응답하지 않습니다. 다시 시도하세요.",
   "error.saveCancelled": "파일 내보내기를 취소했습니다. '계속'을 누르면 다시 다운로드하지 않고 재시도할 수 있습니다.",
   "error.saveTimeout": "브라우저 내보내기 시간이 초과되었습니다. '계속'을 누르면 다시 다운로드하지 않고 재시도할 수 있습니다.",

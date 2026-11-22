@@ -73,7 +73,7 @@ async function buildScripts() {
   if (existsSync(distExtDir)) {
     rmSync(distExtDir, { recursive: true, force: true });
   }
-  const tempMirror = resolve(rootDir, "node_modules/.cache/tug-web-ext-mirror");
+  const tempMirror = resolve(rootDir, "node_modules/.cache/tug-ext-mirror");
   if (existsSync(tempMirror)) {
     rmSync(tempMirror, { recursive: true, force: true });
   }
@@ -82,10 +82,10 @@ async function buildScripts() {
   cpSync(tempMirror, distExtDir, { recursive: true });
   rmSync(tempMirror, { recursive: true, force: true });
 
-  console.log("[tug-web] Extension build completed: dist/ and dist/extension/");
+  console.log("[tug] Extension build completed: dist/ and dist/extension/");
 }
 
 buildScripts().catch((err) => {
-  console.error("[tug-web] Build failed:", err);
+  console.error("[tug] Build failed:", err);
   process.exit(1);
 });

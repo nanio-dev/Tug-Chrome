@@ -1,6 +1,6 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
-//! `tug-agent` (`Tug Agent`) —— Tug Web 浏览器插件专属的无状态本地协议代理服务。
+//! `tug-agent` (`Tug Agent`) —— Tug 浏览器插件专属的无状态本地协议代理服务。
 //!
 //! 模块划分：
 //! - `config`: 端口、空闲超时、Host 名称、DHT 引导节点与公共 Tracker 常量

@@ -27,13 +27,13 @@ if not exist "node_modules\.bin\vite.cmd" goto install
 goto build
 
 :install
-echo [Tug Web] Installing dependencies...
+echo [Tug] Installing dependencies...
 call npm.cmd ci --include=dev
 set "TUG_BUILD_EXIT=%errorlevel%"
 if not "%TUG_BUILD_EXIT%"=="0" goto failed
 
 :build
-echo [Tug Web] Building the browser extension...
+echo [Tug] Building the browser extension...
 call npm.cmd run build
 set "TUG_BUILD_EXIT=%errorlevel%"
 if not "%TUG_BUILD_EXIT%"=="0" goto failed

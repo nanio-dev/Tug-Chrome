@@ -1,5 +1,5 @@
 <h1 align="center">
-  <img src="public/tug-icon.png" width="40" alt="Tug Web icon"> Tug Web
+  <img src="public/tug-icon.png" width="40" alt="Tug icon"> Tug-Chrome
 </h1>
 
 <p align="center">Your browser download workspace · Multi-connection · Resume · BitTorrent / Magnet</p>
@@ -9,28 +9,28 @@
   <a href="LICENSE"><img alt="Apache-2.0" src="https://img.shields.io/badge/License-Apache--2.0-blue"></a>
 </p>
 <p align="center"><a href="README.md">简体中文</a> · <b>English</b></p>
-<p align="center"><a href="https://github.com/nanio-dev/Tug-Web/releases/tag/last">Latest release</a> · <a href="https://github.com/nanio-dev/Tug-Desktop">Windows</a> · <a href="https://github.com/nanio-dev/Tug-Android">Android</a></p>
+<p align="center"><a href="https://github.com/nanio-dev/Tug-Chrome/releases/tag/last">Latest release</a> · <a href="https://github.com/nanio-dev/Tug-Desktop">Windows</a> · <a href="https://github.com/nanio-dev/Tug-Android">Android</a></p>
 
-Tug Web is an independent download extension for Chromium browsers. Manage HTTP/HTTPS downloads, paused tasks, torrents and magnet links in Chrome, Edge and compatible browsers. Browser downloads work without Tug Desktop.
+Tug is an independent download extension for Chromium browsers. Manage HTTP/HTTPS downloads, paused tasks, torrents and magnet links in Chrome, Edge and compatible browsers. Browser downloads work without Tug Desktop.
 
 ## Download
 
 | File | Purpose |
 |---|---|
-| [Browser extension CRX](https://github.com/nanio-dev/Tug-Web/releases/download/last/tug-web.crx) | Signed CRX3 package; installation depends on browser policy |
-| [Tug Agent · Windows x64](https://github.com/nanio-dev/Tug-Web/releases/download/last/tug-agent.exe) | Optional; adds traditional BT connectivity and system file export/reveal |
-| [Tug Agent · macOS](https://github.com/nanio-dev/Tug-Web/releases/download/last/tug-agent-macos-universal.zip) | Universal Intel / Apple Silicon app |
-| [Tug Agent · Linux x64](https://github.com/nanio-dev/Tug-Web/releases/download/last/tug-agent-linux-x64.tar.gz) | Extract and run `sh install.sh`, without sudo |
-| [Tug Agent · Linux ARM64](https://github.com/nanio-dev/Tug-Web/releases/download/last/tug-agent-linux-arm64.tar.gz) | Extract and run `sh install.sh`, without sudo |
-| [Build manifest](https://github.com/nanio-dev/Tug-Web/releases/download/last/release.json) | Source commit, build time and file checksums |
-| [SHA256SUMS.txt](https://github.com/nanio-dev/Tug-Web/releases/download/last/SHA256SUMS.txt) | Download checksums |
+| [Browser extension CRX](https://github.com/nanio-dev/Tug-Chrome/releases/download/last/tug.crx) | Signed CRX3 package; installation depends on browser policy |
+| [Tug Agent · Windows x64](https://github.com/nanio-dev/Tug-Chrome/releases/download/last/tug-agent.exe) | Optional; adds traditional BT connectivity and system file export/reveal |
+| [Tug Agent · macOS](https://github.com/nanio-dev/Tug-Chrome/releases/download/last/tug-agent-macos-universal.zip) | Universal Intel / Apple Silicon app |
+| [Tug Agent · Linux x64](https://github.com/nanio-dev/Tug-Chrome/releases/download/last/tug-agent-linux-x64.tar.gz) | Extract and run `sh install.sh`, without sudo |
+| [Tug Agent · Linux ARM64](https://github.com/nanio-dev/Tug-Chrome/releases/download/last/tug-agent-linux-arm64.tar.gz) | Extract and run `sh install.sh`, without sudo |
+| [Build manifest](https://github.com/nanio-dev/Tug-Chrome/releases/download/last/release.json) | Source commit, build time and file checksums |
+| [SHA256SUMS.txt](https://github.com/nanio-dev/Tug-Chrome/releases/download/last/SHA256SUMS.txt) | Download checksums |
 
 ### Get started
 
 1. Download the signed CRX and open your browser's extension management page.
 2. Import it only where your browser supports manual CRX installation; browser and management policies apply.
 3. Chrome on Windows/macOS restricts non-store extensions, usually requiring managed enterprise deployment. Developers can build from source and load `dist/extension/` using Developer mode.
-4. Pin Tug Web to the toolbar. Add a link in the popup or open the dashboard to manage all downloads.
+4. Pin Tug to the toolbar. Add a link in the popup or open the dashboard to manage all downloads.
 
 HTTP/HTTPS and compatible WebTorrent/WebSeed tasks can use browser-only mode. For traditional BT TCP/UDP/DHT peers or system file export/reveal, follow the extension's setup flow to enable the optional **Tug Agent companion component** on Windows, macOS or Linux.
 
@@ -75,14 +75,14 @@ On Windows, `build.bat` builds the extension into `dist/extension/` (`dist/` is 
 
 | File | Contents |
 |---|---|
-| `tug-web.crx` | Signed CRX3 / Manifest V3 extension |
+| `tug.crx` | Signed CRX3 / Manifest V3 extension |
 | `tug-agent.exe` | Windows Release companion component |
 | `tug-agent-macos-universal.zip` | Universal macOS application |
 | `tug-agent-linux-x64.tar.gz`, `tug-agent-linux-arm64.tar.gz` | Linux installers |
 | `release.json` | Version, source commit, sizes and SHA-256 hashes |
 | `SHA256SUMS.txt` | Plain-text checksums |
 
-The signing key is created locally at `.local/tug-web-signing.pem` and reused to retain the extension ID. Back it up; it is excluded from Git and `out/`. Set `TUG_EXTENSION_SIGNING_KEY` to reuse an existing key.
+The signing key is created locally at `.local/tug-signing.pem` and reused to retain the extension ID. Back it up; it is excluded from Git and `out/`. Set `TUG_EXTENSION_SIGNING_KEY` to reuse an existing key.
 
 Native GitHub Actions runners build and test Mac/Linux artifacts. Packaging requires an authenticated GitHub CLI and downloads the successful build matching the Agent source commit; missing/failed builds stop publication. Build locally on Mac/Linux with `sh agent/build.sh`. The full publish pipeline is `web/push.bat --no-pause`.
 
@@ -102,7 +102,7 @@ npm run test:browser
 npm run test:agent
 ```
 
-Found a problem? Open an [issue](https://github.com/nanio-dev/Tug-Web/issues).
+Found a problem? Open an [issue](https://github.com/nanio-dev/Tug-Chrome/issues).
 
 ## License
 

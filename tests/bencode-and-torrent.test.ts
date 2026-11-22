@@ -40,7 +40,7 @@ describe("Bencode & Torrent/Magnet Parser", () => {
   });
 
   it("parses single-file and multi-file .torrent buffers and computes exact SHA-1 infoHash", async () => {
-    const piece0 = utf8ToBytes("Hello Tug Web BitTorrent Piece 0!");
+    const piece0 = utf8ToBytes("Hello Tug BitTorrent Piece 0!");
     const piece1 = utf8ToBytes("Second Piece Data for Verification");
     const hash0 = await computeSha1Bytes(piece0);
     const hash1 = await computeSha1Bytes(piece1);

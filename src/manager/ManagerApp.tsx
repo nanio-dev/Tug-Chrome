@@ -375,7 +375,7 @@ function ManagerInner({
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark">
-            <img src="/icons/icon-128.png" alt="Tug Web" />
+            <img src="/icons/icon-128.png" alt="Tug" />
           </div>
           <div>
             <div className="brand-name">{t("app.name")}</div>
@@ -558,7 +558,7 @@ function ManagerInner({
             <div className="overview-grid">
               <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
                 <div className="card hero-card">
-                  <div className="hero-kicker">TUG WEB ENGINE · MV3</div>
+                  <div className="hero-kicker">TUG ENGINE · MV3</div>
                   <h2>{t("overview.heroLead")}</h2>
                   <p>{t("overview.heroDesc")}</p>
 

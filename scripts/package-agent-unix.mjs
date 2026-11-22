@@ -20,7 +20,7 @@ try{
   if(!['x64','arm64'].includes(arch))throw Error('Unsupported Linux architecture');
   const dir=path.join(temp,'tug-agent');await mkdir(dir);await copyFile(path.resolve(binary),path.join(dir,'tug-agent'));await chmod(path.join(dir,'tug-agent'),0o755);
   await copyFile(path.join(root,'agent/install.sh'),path.join(dir,'install.sh'));await chmod(path.join(dir,'install.sh'),0o755);
-  await writeFile(path.join(dir,'README.txt'),'Extract this archive, open a terminal in this folder, and run: sh install.sh\nRun as your normal desktop user, without sudo. Return to Tug Web after installation.\nNative .deb/.rpm/AppImage browsers are supported; sandboxed Snap/Flatpak browsers require a host bridge.\n');
+  await writeFile(path.join(dir,'README.txt'),'Extract this archive, open a terminal in this folder, and run: sh install.sh\nRun as your normal desktop user, without sudo. Return to Tug after installation.\nNative .deb/.rpm/AppImage browsers are supported; sandboxed Snap/Flatpak browsers require a host bridge.\n');
   execFileSync('tar',['-czf',path.join(out,`tug-agent-linux-${arch}.tar.gz`),'-C',temp,'tug-agent']);
  }
 }finally{await import('node:fs/promises').then(fs=>fs.rm(temp,{recursive:true,force:true}));}
